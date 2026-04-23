@@ -1,0 +1,923 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================================================
+// ENUMS
+// ============================================================================
+
+enum UserRole {
+  SUPER_ADMIN
+  MANAGER
+  SALES
+  OPERATOR
+  CASHIER
+}
+
+enum LeadStatus {
+  NEW
+  CONTACTED
+  DEPOSIT_REQUESTED
+  DEPOSIT_RECEIVED
+  BOOKING_CREATED
+  LOST
+  QUOTED
+  NEGOTIATING
+  REJECTED
+  WON
+}
+
+enum BookingStatus {
+  PENDING
+  DRAFT
+  DEPOSIT_REQUESTED
+  DEPOSIT_RECEIVED
+  CONFIRMED
+  SCHEDULED_PICKUP
+  PICKED_UP
+  RETURN_PENDING
+  RETURNED
+  COMPLETED
+  CANCELLED
+}
+
+enum InventoryItemStatus {
+  AVAILABLE
+  RESERVED
+  RENTED
+  DAMAGED
+  RETIRED
+  MAINTENANCE
+}
+
+enum RentalStatus {
+  PENDING_PAYMENT
+  CONFIRMED
+  PICKED_UP
+  IN_RENTAL
+  RETURNED
+  COMPLETED
+  CANCELLED
+}
+
+enum PaymentStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
+  FAILED
+  REFUNDED
+  PARTIALLY_REFUNDED
+}
+
+enum PaymentMethod {
+  PENDING
+  CASH
+  CARD
+  BANK_TRANSFER
+  STRIPE
+  MOMO
+  ZALO_PAY
+}
+
+enum PaymentType {
+  BOOKING_DEPOSIT
+  RENTAL_PAYMENT
+  SECURITY_DEPOSIT
+  FEE
+  REFUND
+}
+
+enum AppointmentType {
+  CONSULTATION
+  FITTING
+  PICKUP
+  RETURN
+}
+
+enum AppointmentStatus {
+  SCHEDULED
+  CHECKED_IN
+  COMPLETED
+  CANCELLED
+}
+
+enum RentalOrderStatus {
+  DRAFT
+  PENDING_CONFIRMATION
+  CONFIRMED
+  PREPARING
+  PICKED_UP
+  RENTED_OUT
+  RETURNED
+  OVERDUE
+  CANCELLED
+}
+
+enum RentalOrderPaymentStatus {
+  UNPAID
+  PARTIALLY_PAID
+  PAID
+  REFUNDED
+  FAILED
+}
+
+enum PaymentGateway {
+  PAYOS
+  STRIPE
+  VNPAY
+  MOMO
+  MANUAL
+}
+
+enum PaymentTransactionStatus {
+  PENDING
+  PROCESSING
+  SUCCESS
+  FAILED
+  CANCELLED
+}
+
+enum PreviewRequestStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
+  REJECTED
+}
+
+enum ReceiptType {
+  DEPOSIT_RECEIPT
+  RENTAL_RECEIPT
+  RETURN_RECEIPT
+  REFUND_RECEIPT
+}
+
+enum AuditAction {
+  CREATE
+  UPDATE
+  STATUS_CHANGE
+  PAYMENT_POSTED
+  PAYMENT_PROCESSED
+  REFUND_PROCESSED
+  INVENTORY_LOCKED
+  INVENTORY_RELEASED
+  PICKUP_CONFIRMED
+  RETURN_INSPECTED
+  RETURN_SETTLED
+  DISPUTE_OPENED
+  DISPUTE_UPDATED
+  DISPUTE_RESOLVED
+  ARCHIVE
+}
+
+enum DisputeStatus {
+  OPEN
+  IN_REVIEW
+  WAITING_ON_CUSTOMER
+  WAITING_ON_MANAGER
+  RESOLVED
+  REJECTED
+  CANCELLED
+}
+
+enum DisputePriority {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+enum DisputeCategory {
+  DAMAGE_FEE
+  LATE_FEE
+  CLEANING_FEE
+  MISSING_ACCESSORY
+  PAYMENT
+  REFUND
+  INVENTORY_MISMATCH
+  BOOKING_TERMS
+  OTHER
+}
+
+enum DisputeResolutionOutcome {
+  CUSTOMER_REFUND
+  FEE_UPHELD
+  PARTIAL_ADJUSTMENT
+  INTERNAL_WRITE_OFF
+  CUSTOMER_CANCELLED
+  NO_ACTION
+}
+
+// ============================================================================
+// USERS & AUTHENTICATION
+// ============================================================================
+
+model User {
+  id         String    @id @default(cuid())
+  email      String    @unique
+  password   String
+  fullName   String
+  phone      String?
+  avatar     String?
+  role       UserRole  @default(CASHIER)
+  isActive   Boolean   @default(true)
+  archivedAt DateTime?
+
+  // Relations
+  leads           Lead[]
+  bookings        Booking[]
+  pickupRentals   Rental[]         @relation("pickedUpBy")
+  returnRentals   Rental[]         @relation("returnedBy")
+  payments        Payment[]        @relation("processedBy")
+  createdReceipts Receipt[]        @relation("createdBy")
+  appointments    Appointment[]
+  previewRequests PreviewRequest[]
+  rentalOrders    RentalOrder[]    @relation("rentalOrderCreatedBy")
+  auditLogs        AuditLog[]       @relation("auditActor")
+  assignedDisputes Dispute[]        @relation("disputeAssignee")
+  createdDisputes  Dispute[]        @relation("disputeCreatedBy")
+  resolvedDisputes Dispute[]        @relation("disputeResolvedBy")
+  disputeEvidence  DisputeEvidence[] @relation("evidenceUploadedBy")
+
+  // Timestamps
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("users")
+}
+
+// ============================================================================
+// CUSTOMERS & LEADS
+// ============================================================================
+
+model Customer {
+  id    String @id @default(cuid())
+  email String @unique
+  phone String
+  name  String
+
+  // Relations
+  leads           Lead[]
+  bookings        Booking[]
+  appointments    Appointment[]
+  previewRequests PreviewRequest[]
+  rentalOrders    RentalOrder[]
+
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+  archivedAt DateTime?
+
+  @@map("customers")
+}
+
+model Lead {
+  id         String   @id @default(cuid())
+  customerId String
+  customer   Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+
+  status        LeadStatus @default(NEW)
+  source        String? // web, direct, referral, etc.
+  notes         String?
+  quotedPrice   Float?
+  requiredItems Int?
+  rentalDates   String? // JSON: { startDate, endDate }
+  contactDeadlineAt DateTime?
+  contactedAt        DateTime?
+  depositRequestedAt DateTime?
+  depositDeadlineAt  DateTime?
+  depositReceivedAt  DateTime?
+  lostReason         String?
+
+  assignedToId String?
+  assignedTo   User?   @relation(fields: [assignedToId], references: [id])
+
+  convertedToBookingId String?
+
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+  archivedAt DateTime?
+
+  @@index([customerId])
+  @@index([assignedToId])
+  @@map("leads")
+}
+
+// ============================================================================
+// PRODUCTS & INVENTORY
+// ============================================================================
+
+model Product {
+  id          String    @id @default(cuid())
+  name        String
+  description String?
+  category    String
+  price       Float // Base 3-day rental price
+  image       String?
+  isActive    Boolean   @default(true)
+  archivedAt  DateTime?
+
+  // Stock
+  totalItems Int @default(0)
+
+  // Relations
+  inventoryItems InventoryItem[]
+  bookingItems   BookingItem[]
+  variants       ProductVariant[]
+  rentalOrderItems RentalOrderItem[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([category])
+  @@map("products")
+}
+
+model ProductVariant {
+  id        String  @id @default(cuid())
+  productId String
+  product   Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  name       String
+  sku        String    @unique
+  size       String?
+  color      String?
+  material   String?
+  imageUrls  String?
+  isActive   Boolean   @default(true)
+  archivedAt DateTime?
+
+  inventoryItems InventoryItem[]
+  bookingItems    BookingItem[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([productId])
+  @@map("product_variants")
+}
+
+model InventoryItem {
+  id        String          @id @default(cuid())
+  productId String
+  product   Product         @relation(fields: [productId], references: [id], onDelete: Cascade)
+  variantId String?
+  variant   ProductVariant? @relation(fields: [variantId], references: [id])
+
+  qrCode       String              @unique // QR code unique identifier
+  qrVersion    Int                 @default(1)
+  previousQrCodes String?
+  serialNumber String              @unique
+  status       InventoryItemStatus @default(AVAILABLE)
+
+  condition         String? // excellent, good, fair, damaged
+  imageUrls         String?
+  lastMaintenanceAt DateTime?
+  archivedAt        DateTime?
+
+  // Relations
+  bookingItems BookingItem[]
+  rentals      Rental[]      @relation("inventoryItems")
+  appointmentReservations Appointment[] @relation("appointmentResourceItem")
+  rentalOrderItems RentalOrderItem[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([productId])
+  @@index([qrCode])
+  @@index([status])
+  @@map("inventory_items")
+}
+
+// ============================================================================
+// BOOKINGS & RENTAL CALENDAR
+// ============================================================================
+
+model Booking {
+  id         String   @id @default(cuid())
+  customerId String
+  customer   Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+
+  leadId     String?
+  status     BookingStatus @default(DRAFT)
+  startDate  DateTime
+  endDate    DateTime
+  rentalDays Int
+  pickupDate DateTime?
+  returnDate DateTime?
+  durationDays Int @default(3)
+  basePrice Float @default(0)
+  priceAdjustment Float @default(0)
+  totalPrice Float // operational rental price after duration adjustment
+  bookingDepositRequired Float @default(0)
+  bookingDepositPaid Float @default(0)
+  securityDepositRequired Float @default(0)
+  securityDepositHeld Float @default(0)
+  securityDepositOption String?
+  accessories String?
+  lockedAt DateTime?
+  failureReason String?
+  replacementDiscountPercent Float?
+
+  notes       String?
+  createdById String
+  createdBy   User      @relation(fields: [createdById], references: [id])
+  archivedAt  DateTime?
+
+  // Relations
+  items  BookingItem[]
+  rental Rental?
+  payments Payment[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([customerId])
+  @@index([createdById])
+  @@index([startDate, endDate])
+  @@map("bookings")
+}
+
+model BookingItem {
+  id        String  @id @default(cuid())
+  bookingId String
+  booking   Booking @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+
+  productId String
+  product   Product @relation(fields: [productId], references: [id])
+  variantId String?
+  variant   ProductVariant? @relation(fields: [variantId], references: [id])
+
+  inventoryItemId String
+  inventoryItem   InventoryItem @relation(fields: [inventoryItemId], references: [id])
+
+  quantity    Int   @default(1)
+  pricePerDay Float
+
+  @@unique([bookingId, inventoryItemId])
+  @@index([bookingId])
+  @@index([inventoryItemId])
+  @@index([variantId])
+  @@map("booking_items")
+}
+
+model CalendarBlock {
+  id              String   @id @default(cuid())
+  inventoryItemId String
+  reason          String // maintenance, unavailable, etc.
+  startDate       DateTime
+  endDate         DateTime
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([inventoryItemId, startDate, endDate])
+  @@map("calendar_blocks")
+}
+
+model Appointment {
+  id         String   @id @default(cuid())
+  customerId String
+  customer   Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+
+  type            AppointmentType
+  status          AppointmentStatus @default(SCHEDULED)
+  scheduledAt     DateTime
+  durationMinutes Int               @default(45)
+  startTime       DateTime?
+  endTime         DateTime?
+  durationHours   Float?
+  hourlyBlock     Boolean           @default(true)
+  lifecycleStatus String            @default("pending")
+  room            String?
+  notes           String?
+  resourceItemId  String?
+  resourceItem    InventoryItem?    @relation("appointmentResourceItem", fields: [resourceItemId], references: [id])
+
+  staffId   String?
+  staff     User?   @relation(fields: [staffId], references: [id])
+  leadId    String?
+  bookingId String?
+
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+  archivedAt DateTime?
+
+  @@index([customerId])
+  @@index([staffId])
+  @@index([scheduledAt])
+  @@index([status])
+  @@index([resourceItemId])
+  @@index([startTime, endTime])
+  @@map("appointments")
+}
+
+model RentalOrder {
+  id            String                   @id @default(cuid())
+  orderCode     String                   @unique
+  customerId    String
+  customer      Customer                 @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  status        RentalOrderStatus        @default(DRAFT)
+  paymentStatus RentalOrderPaymentStatus @default(UNPAID)
+  startDateTime DateTime
+  endDateTime   DateTime
+  quantity      Int                      @default(1)
+  durationHours Int                      @default(24)
+  subtotal      Float                    @default(0)
+  depositAmount Float                    @default(0)
+  additionalFees Float                   @default(0)
+  discountAmount Float                   @default(0)
+  totalAmount   Float                    @default(0)
+  notes         String?
+  createdById   String?
+  createdBy     User?                    @relation("rentalOrderCreatedBy", fields: [createdById], references: [id])
+  archivedAt    DateTime?
+
+  items         RentalOrderItem[]
+  transactions  PaymentTransaction[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([customerId])
+  @@index([status])
+  @@index([paymentStatus])
+  @@index([startDateTime, endDateTime])
+  @@map("rental_orders")
+}
+
+model RentalOrderItem {
+  id              String       @id @default(cuid())
+  rentalOrderId   String
+  rentalOrder     RentalOrder  @relation(fields: [rentalOrderId], references: [id], onDelete: Cascade)
+  productId       String?
+  product         Product?     @relation(fields: [productId], references: [id])
+  inventoryItemId String?
+  inventoryItem   InventoryItem? @relation(fields: [inventoryItemId], references: [id])
+  quantity        Int          @default(1)
+  unitPrice       Float        @default(0)
+  notes           String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([rentalOrderId])
+  @@index([inventoryItemId])
+  @@map("rental_order_items")
+}
+
+// ============================================================================
+// RENTALS & OPERATIONS
+// ============================================================================
+
+model Rental {
+  id        String  @id @default(cuid())
+  bookingId String  @unique
+  booking   Booking @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+
+  status RentalStatus @default(PENDING_PAYMENT)
+
+  scheduledPickupDate DateTime
+  actualPickupDate    DateTime?
+  pickedUpById        String?
+  pickedUpBy          User?     @relation("pickedUpBy", fields: [pickedUpById], references: [id])
+
+  scheduledReturnDate DateTime
+  actualReturnDate    DateTime?
+  returnedById        String?
+  returnedBy          User?     @relation("returnedBy", fields: [returnedById], references: [id])
+
+  // Damage tracking
+  pickupConditionNotes String?
+  returnConditionNotes String?
+  damageCost           Float     @default(0)
+  archivedAt           DateTime?
+
+  // Relations
+  inventoryItems InventoryItem[] @relation("inventoryItems")
+  payments       Payment[]
+  returnInspections ReturnInspection[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([bookingId])
+  @@index([status])
+  @@index([scheduledPickupDate])
+  @@map("rentals")
+}
+
+// ============================================================================
+// PAYMENTS & RECEIPTS
+// ============================================================================
+
+model Payment {
+  id       String @id @default(cuid())
+  rentalId String
+  rental   Rental @relation(fields: [rentalId], references: [id], onDelete: Cascade)
+  bookingId String?
+  booking   Booking? @relation(fields: [bookingId], references: [id], onDelete: SetNull)
+
+  status         PaymentStatus @default(PENDING)
+  type           PaymentType   @default(RENTAL_PAYMENT)
+  amount         Float
+  amountPaid     Float         @default(0)
+  amountRefunded Float         @default(0)
+
+  paymentMethod         PaymentMethod
+  externalTransactionId String?
+
+  // Breakdown
+  rentalAmount  Float
+  depositAmount Float @default(0)
+  securityDepositAmount Float @default(0)
+  damageAmount  Float @default(0)
+  otherFees     Float @default(0)
+  refundAmount  Float @default(0)
+
+  description String?
+
+  processedById String?
+  processedBy   User?   @relation("processedBy", fields: [processedById], references: [id])
+
+  // Relations
+  receipts Receipt[]
+  transactions PaymentTransaction[]
+
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+  paidAt     DateTime?
+  archivedAt DateTime?
+
+  @@index([rentalId])
+  @@index([bookingId])
+  @@index([status])
+  @@index([createdAt])
+  @@map("payments")
+}
+
+model ReturnInspection {
+  id       String @id @default(cuid())
+  rentalId String
+  rental   Rental @relation(fields: [rentalId], references: [id], onDelete: Cascade)
+
+  condition    String
+  imageUrls    String?
+  notes        String?
+  suggestedFee Float   @default(0)
+  inspectedById String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([rentalId])
+  @@map("return_inspections")
+}
+
+model PaymentTransaction {
+  id                    String                    @id @default(cuid())
+  paymentId             String?
+  payment               Payment?                  @relation(fields: [paymentId], references: [id], onDelete: SetNull)
+  rentalOrderId         String?
+  rentalOrder           RentalOrder?              @relation(fields: [rentalOrderId], references: [id], onDelete: SetNull)
+  provider              PaymentGateway
+  status                PaymentTransactionStatus   @default(PENDING)
+  amount                Float
+  currency              String                    @default("VND")
+  checkoutUrl           String?
+  providerTransactionId String?
+  providerEventId       String?                   @unique
+  idempotencyKey        String?
+  callbackUrl           String?
+  returnUrl             String?
+  failReason            String?
+  metadata              String?
+  paidAt                DateTime?
+  canceledAt            DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([paymentId])
+  @@index([rentalOrderId])
+  @@index([provider])
+  @@index([status])
+  @@unique([provider, providerTransactionId])
+  @@map("payment_transactions")
+}
+
+model Receipt {
+  id        String  @id @default(cuid())
+  paymentId String
+  payment   Payment @relation(fields: [paymentId], references: [id], onDelete: Cascade)
+
+  receiptNumber String      @unique
+  type          ReceiptType @default(RENTAL_RECEIPT)
+  pdfUrl        String?
+
+  createdById String
+  createdBy   User   @relation("createdBy", fields: [createdById], references: [id])
+
+  printedAt    DateTime?
+  printedCount Int       @default(0)
+  archivedAt   DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([paymentId])
+  @@map("receipts")
+}
+
+// ============================================================================
+// REPORTS & ANALYTICS
+// ============================================================================
+
+model DailyReport {
+  id         String   @id @default(cuid())
+  reportDate DateTime
+
+  totalRevenue  Float @default(0)
+  paymentsCount Int   @default(0)
+  bookingsCount Int   @default(0)
+  pickupsCount  Int   @default(0)
+  returnsCount  Int   @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([reportDate])
+  @@map("daily_reports")
+}
+
+model PreviewRequest {
+  id         String    @id @default(cuid())
+  customerId String?
+  customer   Customer? @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  leadId     String?
+  bookingId  String?
+
+  garmentName    String
+  sourceImageUrl String?
+  resultImageUrl String?
+  status         PreviewRequestStatus @default(PENDING)
+  notes          String?
+  resultNotes    String?
+
+  assignedToId String?
+  assignedTo   User?   @relation(fields: [assignedToId], references: [id])
+
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+  archivedAt DateTime?
+
+  @@index([customerId])
+  @@index([assignedToId])
+  @@index([status])
+  @@map("preview_requests")
+}
+
+// ============================================================================
+// NOTIFICATIONS (for future use)
+// ============================================================================
+
+model Notification {
+  id      String  @id @default(cuid())
+  userId  String
+  title   String
+  message String
+  type    String // email, sms, in-app
+  read    Boolean @default(false)
+
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@index([createdAt])
+  @@map("notifications")
+}
+
+model SiteSetting {
+  id        String   @id @default(cuid())
+  key       String   @unique
+  value     String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("site_settings")
+}
+
+model AuditLog {
+  id        String      @id @default(cuid())
+  action    AuditAction
+  entity    String
+  entityId  String
+  label     String?
+  summary   String
+  before    Json?
+  after     Json?
+  metadata  Json?
+
+  actorId String?
+  actor   User?   @relation("auditActor", fields: [actorId], references: [id], onDelete: SetNull)
+
+  bookingId          String?
+  rentalId           String?
+  rentalOrderId      String?
+  paymentId          String?
+  inventoryItemId    String?
+  returnInspectionId String?
+  disputeId          String?
+
+  createdAt DateTime @default(now())
+
+  @@index([entity, entityId])
+  @@index([bookingId])
+  @@index([rentalId])
+  @@index([rentalOrderId])
+  @@index([paymentId])
+  @@index([inventoryItemId])
+  @@index([disputeId])
+  @@index([actorId])
+  @@index([createdAt])
+  @@map("audit_logs")
+}
+
+model Dispute {
+  id          String          @id @default(cuid())
+  caseNumber  String          @unique
+  title       String
+  category    DisputeCategory
+  priority    DisputePriority @default(MEDIUM)
+  status      DisputeStatus   @default(OPEN)
+  summary     String
+  customerPosition String?
+  internalNotes    String?
+  requestedAmount  Float      @default(0)
+  approvedAmount   Float      @default(0)
+
+  bookingId          String?
+  rentalId           String?
+  rentalOrderId      String?
+  paymentId          String?
+  inventoryItemId    String?
+  returnInspectionId String?
+
+  assignedToId String?
+  assignedTo   User?   @relation("disputeAssignee", fields: [assignedToId], references: [id], onDelete: SetNull)
+  createdById  String?
+  createdBy    User?   @relation("disputeCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  resolvedById String?
+  resolvedBy   User?   @relation("disputeResolvedBy", fields: [resolvedById], references: [id], onDelete: SetNull)
+
+  resolutionOutcome DisputeResolutionOutcome?
+  resolutionSummary String?
+  resolvedAt        DateTime?
+  dueAt             DateTime?
+
+  evidence DisputeEvidence[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([status])
+  @@index([priority])
+  @@index([category])
+  @@index([bookingId])
+  @@index([rentalId])
+  @@index([rentalOrderId])
+  @@index([paymentId])
+  @@index([inventoryItemId])
+  @@index([assignedToId])
+  @@index([createdAt])
+  @@map("disputes")
+}
+
+model DisputeEvidence {
+  id          String  @id @default(cuid())
+  disputeId   String
+  dispute     Dispute @relation(fields: [disputeId], references: [id], onDelete: Cascade)
+
+  fileName    String
+  fileUrl     String
+  mimeType    String?
+  fileSize    Int?
+  evidenceType String @default("attachment")
+  note        String?
+  checksum    String?
+
+  uploadedById String?
+  uploadedBy   User?   @relation("evidenceUploadedBy", fields: [uploadedById], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+
+  @@index([disputeId])
+  @@index([uploadedById])
+  @@map("dispute_evidence")
+}

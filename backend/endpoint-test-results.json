@@ -1,0 +1,632 @@
+{
+    "summary":  {
+                    "total":  89,
+                    "pass":  89,
+                    "fail":  0
+                },
+    "results":  [
+                    {
+                        "method":  "GET",
+                        "path":  "/health",
+                        "status":  200,
+                        "outcome":  "PASS",
+                        "note":  "OK"
+                    },
+                    {
+                        "method":  "POST",
+                        "path":  "/auth/login",
+                        "status":  201,
+                        "outcome":  "PASS",
+                        "note":  "OK"
+                    },
+                    {
+                        "method":  "POST",
+                        "path":  "/auth/login",
+                        "status":  201,
+                        "outcome":  "PASS",
+                        "note":  "OK"
+                    },
+                    {
+                        "method":  "POST",
+                        "path":  "/auth/login",
+                        "status":  201,
+                        "outcome":  "PASS",
+                        "note":  "OK"
+                    },
+                    {
+                        "method":  "POST",
+                        "path":  "/auth/login",
+                        "status":  201,
+                        "outcome":  "PASS",
+                        "note":  "OK"
+                    },
+                    {
+                        "method":  "POST",
+                        "path":  "/auth/login",
+                        "status":  201,
+                        "outcome":  "PASS",
+                        "note":  "OK"
+                    },
+                    {
+                        "method":  "POST",
+                        "path":  "/auth/refresh",
+                        "status":  201,
+                        "outcome":  "PASS",
+                        "note":  "OK"
+                    },
+                    {
+                        "method":  "POST",
+                        "path":  "/auth/logout",
+                        "status":  201,
+                        "outcome":  "PASS",
+                        "note":  "OK"
+                    },
+                    {
+                        "method":  "GET",
+                        "path":  "/users",
+                        "status":  200,
+                        "outcome":  "PASS",
+                        "note":  "OK"
+                    },
+                    {
+                        "method":  "GET",
+                        "path":  "/users/cmo5cwvr600023wpimv0k0dwc",
+                        "status":  200,
+                        "outcome":  "PASS",
+                        "note":  "OK"
+                    },
+                    {
+                        "method":  "POST",
+                        "path":  "/users",
+                        "status":  201,
+                        "outcome":  "PASS",
+                        "note":  "OK"
+                    },
+                    {
+                        "method":  "PATCH",
+                        "path":  "/users/cmo5cwzis001cjirvmwf6j54t",
+                        "status":  200,
+                        "outcome":  "PASS",
+                        "note":  "OK"
+                    },
+                    {
+                        "method":  "PATCH",
+                        "path":  "/users/cmo5cwzis001cjirvmwf6j54t/archive",
+                        "status":  200,
+                        "outcome":  "PASS",
+                        "note":  "OK"
+                    },
+                    {
+                        "method":  "POST",
+                        "path":  "/users",
+                        "status":  201,
+                        "outcome":  "PASS",
+                        "note":  "OK"
+                    },
+                    {
+                        "method":  "DELETE",
+                        "path":  "/users/cmo5cwzlo001djirvam570m0f",
+                        "status":  200,
+                        "outcome":  "PASS",
+                        "note":  "OK"
+                    },
+                    {
+                        "method":  "GET",
+                        "path":  "/leads",
+                        "status":  200,
+                        "outcome":  "PASS",
+                        "note":  "OK"
+                    },
+                    {
+                        "method":  "POST",
+                        "path":  "/leads",
+                        "status":  201,
+                        "outcome":  "PASS",
+                        "note":  "OK"
+                    },
+                    {
+                        "method":  "GET",
+                        "path":  "/leads/cmo5cwznb001gjirvi7nffz1b",
+                        "status":  200,
+                        "outcome":  "PASS",
+                        "note":  "OK"
+                    },
+                    {
+                        "method":  "PATCH",
+                        "path":  "/leads/cmo5cwznb001gjirvi7nffz1b",
+                        "status":  200,
+                        "outcome":  "PASS",
+                        "note":  "OK"
+                    },
+                    {
+                        "method":  "PATCH",
+                        "path":  "/leads/cmo5cwznb001gjirvi7nffz1b/status",
+                        "status":  200,
+                        "outcome":  "PASS",
+                        "note":  "OK"
+                    },
+                    {
+                        "method":  "PATCH",
+                        "path":  "/leads/cmo5cwznb001gjirvi7nffz1b/assign",
+                        "status":  200,
+                        "outcome":  "PASS",
+                        "note":  "OK"
+                    },
+                    {
+                        "method":  "GET",
+                        "path":  "/bookings",
+                        "status":  200,
+                        "outcome":  "PASS",
+                        "note":  "OK"
+                    },
+                    {
+                        "method":  "POST",
+                        "path":  "/leads/cmo5cwznb001gjirvi7nffz1b/convert-to-booking",
+                        "status":  201,
+                        "outcome":  "PASS",
+                        "note":  "OK"
+                    },
+                    {
+                        "method":  "PATCH",
+                        "path":  "/leads/cmo5cwznb001gjirvi7nffz1b/archive",
+                        "status":  200,
+                        "outcome":  "PASS",
+                        "note":  "OK"
+                    },
+                    {
+                        "method":  "GET",
+                        "path":  "/products",
+                        "status":  200,
+                        "outcome":  "PASS",
+                        "note":  "OK"
+                    },
+                    {
+                        "method":  "GET",
+                        "path":  "/products/seed-product-accessory-set",
+                        "status":  200,
+                        "outcome":  "PASS",
+                        "note":  "OK"
+                    },
+                    {
+                        "method":  "POST",
+                        "path":  "/products/seed-product-accessory-set/variants",
+                        "status":  201,
+                        "outcome":  "PASS",
+                        "note":  "OK"
+                    },
+                    {
+                        "method":  "PATCH",
+                        "path":  "/products/variants/cmo5cwzsc001ijirvv6d6kcdd",
+                        "status":  200,
+                        "outcome":  "PASS",
+                        "note":  "OK"
+                    },
+                    {
+                        "method":  "PATCH",
+                        "path":  "/products/variants/cmo5cwzsc001ijirvv6d6kcdd/archive",
+                        "status":  200,
+                        "outcome":  "PASS",
+                        "note":  "OK"
+                    },
+                    {
+                        "method":  "GET",
+                        "path":  "/inventory/items",
+                        "status":  200,
+                        "outcome":  "PASS",
+                        "note":  "OK"
+                    },
+                    {
+                        "method":  "GET",
+                        "path":  "/inventory/items/seed-item-accessory-002",
+                        "status":  200,
+                        "outcome":  "PASS",
+                        "note":  "OK"
+                    },
+                    {
+                        "method":  "GET",
+                        "path":  "/inventory/qr/RF-VEST-BLACK-001",
+                        "status":  200,
+                        "outcome":  "PASS",
+                        "note":  "OK"
+                    },
+                    {
+                        "method":  "GET",
+                        "path":  "/inventory/qr/RF-VEST-BLACK-001/resolve",
+                        "status":  200,
+                        "outcome":  "PASS",
+                        "note":  "OK"
+                    },
+                    {
+                        "method":  "GET",
+                        "path":  "/inventory/items/seed-item-accessory-002/status",
+                        "status":  200,
+                        "outcome":  "PASS",
+                        "note":  "OK"
+                    },
+                    {
+                        "method":  "GET",
+                        "path":  "/inventory/items/seed-item-accessory-002/qr-image",
+                        "status":  200,
+                        "outcome":  "PASS",
+                        "note":  "OK"
+                    },
+                    {
+                        "method":  "GET",
+                        "path":  "/inventory/items/seed-item-accessory-002/schedule",
+                        "status":  200,
+                        "outcome":  "PASS",
+                        "note":  "OK"
+                    },
+                    {
+                        "method":  "POST",
+                        "path":  "/inventory/items",
+                        "status":  201,
+                        "outcome":  "PASS",
+                        "note":  "OK"
+                    },
+                    {
+                        "method":  "PATCH",
+                        "path":  "/inventory/items/cmo5cwzxn001kjirvl4n23z8b/status",
+                        "status":  200,
+                        "outcome":  "PASS",
+                        "note":  "OK"
+                    },
+                    {
+                        "method":  "PATCH",
+                        "path":  "/inventory/items/cmo5cwzxn001kjirvl4n23z8b/regenerate-qr",
+                        "status":  200,
+                        "outcome":  "PASS",
+                        "note":  "OK"
+                    },
+                    {
+                        "method":  "GET",
+                        "path":  "/inventory/qr/40d488f8-5116-433c-af03-6617012ec9d2/resolve",
+                        "status":  200,
+                        "outcome":  "PASS",
+                        "note":  "OK"
+                    },
+                    {
+                        "method":  "POST",
+                        "path":  "/inventory/calendar-block",
+                        "status":  201,
+                        "outcome":  "PASS",
+                        "note":  "OK"
+                    },
+                    {
+                        "method":  "PATCH",
+                        "path":  "/inventory/items/cmo5cwzxn001kjirvl4n23z8b/archive",
+                        "status":  200,
+                        "outcome":  "PASS",
+                        "note":  "OK"
+                    },
+                    {
+                        "method":  "GET",
+                        "path":  "/bookings?status=CONFIRMED",
+                        "status":  200,
+                        "outcome":  "PASS",
+                        "note":  "OK"
+                    },
+                    {
+                        "method":  "GET",
+                        "path":  "/bookings/calendar/2026-04-19",
+                        "status":  200,
+                        "outcome":  "PASS",
+                        "note":  "OK"
+                    },
+                    {
+                        "method":  "GET",
+                        "path":  "/bookings/availability?startDate=2026-05-01\u0026endDate=2026-05-02",
+                        "status":  200,
+                        "outcome":  "PASS",
+                        "note":  "OK"
+                    },
+                    {
+                        "method":  "GET",
+                        "path":  "/bookings/seed-booking-processing",
+                        "status":  200,
+                        "outcome":  "PASS",
+                        "note":  "OK"
+                    },
+                    {
+                        "method":  "POST",
+                        "path":  "/bookings",
+                        "status":  201,
+                        "outcome":  "PASS",
+                        "note":  "OK"
+                    },
+                    {
+                        "method":  "PATCH",
+                        "path":  "/bookings/cmo5cx02q001njirvrurre5my/status",
+                        "status":  200,
+                        "outcome":  "PASS",
+                        "note":  "OK"
+                    },
+                    {
+                        "method":  "PATCH",
+                        "path":  "/bookings/cmo5cx02q001njirvrurre5my/archive",
+                        "status":  200,
+                        "outcome":  "PASS",
+                        "note":  "OK"
+                    },
+                    {
+                        "method":  "GET",
+                        "path":  "/rentals",
+                        "status":  200,
+                        "outcome":  "PASS",
+                        "note":  "OK"
+                    },
+                    {
+                        "method":  "GET",
+                        "path":  "/rentals/active",
+                        "status":  200,
+                        "outcome":  "PASS",
+                        "note":  "OK"
+                    },
+                    {
+                        "method":  "POST",
+                        "path":  "/rentals",
+                        "status":  201,
+                        "outcome":  "PASS",
+                        "note":  "OK"
+                    },
+                    {
+                        "method":  "GET",
+                        "path":  "/rentals/cmo5cx05r001rjirvh757cyyi",
+                        "status":  200,
+                        "outcome":  "PASS",
+                        "note":  "OK"
+                    },
+                    {
+                        "method":  "PATCH",
+                        "path":  "/rentals/cmo5cx05r001rjirvh757cyyi/confirm-payment",
+                        "status":  200,
+                        "outcome":  "PASS",
+                        "note":  "OK"
+                    },
+                    {
+                        "method":  "POST",
+                        "path":  "/rentals/cmo5cx05r001rjirvh757cyyi/pickup",
+                        "status":  201,
+                        "outcome":  "PASS",
+                        "note":  "OK"
+                    },
+                    {
+                        "method":  "POST",
+                        "path":  "/rentals/seed-rental-in-rental/return",
+                        "status":  201,
+                        "outcome":  "PASS",
+                        "note":  "OK"
+                    },
+                    {
+                        "method":  "PATCH",
+                        "path":  "/rentals/cmo5cx05r001rjirvh757cyyi/complete",
+                        "status":  200,
+                        "outcome":  "PASS",
+                        "note":  "OK"
+                    },
+                    {
+                        "method":  "GET",
+                        "path":  "/payments",
+                        "status":  200,
+                        "outcome":  "PASS",
+                        "note":  "OK"
+                    },
+                    {
+                        "method":  "GET",
+                        "path":  "/payments/seed-payment-confirmed",
+                        "status":  200,
+                        "outcome":  "PASS",
+                        "note":  "OK"
+                    },
+                    {
+                        "method":  "POST",
+                        "path":  "/payments",
+                        "status":  201,
+                        "outcome":  "PASS",
+                        "note":  "OK"
+                    },
+                    {
+                        "method":  "PATCH",
+                        "path":  "/payments/cmo5cx0a8001vjirvlw805ive/process",
+                        "status":  200,
+                        "outcome":  "PASS",
+                        "note":  "OK"
+                    },
+                    {
+                        "method":  "PATCH",
+                        "path":  "/payments/cmo5cx0a8001vjirvlw805ive/refund",
+                        "status":  200,
+                        "outcome":  "PASS",
+                        "note":  "OK"
+                    },
+                    {
+                        "method":  "PATCH",
+                        "path":  "/payments/cmo5cx0a8001vjirvlw805ive/status",
+                        "status":  200,
+                        "outcome":  "PASS",
+                        "note":  "OK"
+                    },
+                    {
+                        "method":  "POST",
+                        "path":  "/payments/cmo5cx0a8001vjirvlw805ive/receipt",
+                        "status":  201,
+                        "outcome":  "PASS",
+                        "note":  "OK"
+                    },
+                    {
+                        "method":  "GET",
+                        "path":  "/payments/cmo5cx0a8001vjirvlw805ive/receipt",
+                        "status":  200,
+                        "outcome":  "PASS",
+                        "note":  "OK"
+                    },
+                    {
+                        "method":  "PATCH",
+                        "path":  "/payments/cmo5cx0a8001vjirvlw805ive/archive",
+                        "status":  200,
+                        "outcome":  "PASS",
+                        "note":  "OK"
+                    },
+                    {
+                        "method":  "GET",
+                        "path":  "/receipts",
+                        "status":  200,
+                        "outcome":  "PASS",
+                        "note":  "OK"
+                    },
+                    {
+                        "method":  "GET",
+                        "path":  "/receipts/cmo5cx0ce001xjirvz8ue3xxs",
+                        "status":  200,
+                        "outcome":  "PASS",
+                        "note":  "OK"
+                    },
+                    {
+                        "method":  "GET",
+                        "path":  "/receipts/cmo5cx0ce001xjirvz8ue3xxs/pdf",
+                        "status":  200,
+                        "outcome":  "PASS",
+                        "note":  "OK"
+                    },
+                    {
+                        "method":  "PATCH",
+                        "path":  "/receipts/cmo5cx0ce001xjirvz8ue3xxs",
+                        "status":  200,
+                        "outcome":  "PASS",
+                        "note":  "OK"
+                    },
+                    {
+                        "method":  "POST",
+                        "path":  "/receipts/cmo5cx0ce001xjirvz8ue3xxs/print",
+                        "status":  201,
+                        "outcome":  "PASS",
+                        "note":  "OK"
+                    },
+                    {
+                        "method":  "PATCH",
+                        "path":  "/receipts/cmo5cx0ce001xjirvz8ue3xxs/archive",
+                        "status":  200,
+                        "outcome":  "PASS",
+                        "note":  "OK"
+                    },
+                    {
+                        "method":  "GET",
+                        "path":  "/appointments",
+                        "status":  200,
+                        "outcome":  "PASS",
+                        "note":  "OK"
+                    },
+                    {
+                        "method":  "GET",
+                        "path":  "/appointments/seed-appointment-consultation",
+                        "status":  200,
+                        "outcome":  "PASS",
+                        "note":  "OK"
+                    },
+                    {
+                        "method":  "POST",
+                        "path":  "/appointments",
+                        "status":  201,
+                        "outcome":  "PASS",
+                        "note":  "OK"
+                    },
+                    {
+                        "method":  "PATCH",
+                        "path":  "/appointments/cmo5cx0i1001zjirv13blidbw",
+                        "status":  200,
+                        "outcome":  "PASS",
+                        "note":  "OK"
+                    },
+                    {
+                        "method":  "PATCH",
+                        "path":  "/appointments/cmo5cx0i1001zjirv13blidbw/status",
+                        "status":  200,
+                        "outcome":  "PASS",
+                        "note":  "OK"
+                    },
+                    {
+                        "method":  "PATCH",
+                        "path":  "/appointments/cmo5cx0i1001zjirv13blidbw/archive",
+                        "status":  200,
+                        "outcome":  "PASS",
+                        "note":  "OK"
+                    },
+                    {
+                        "method":  "GET",
+                        "path":  "/preview-requests",
+                        "status":  200,
+                        "outcome":  "PASS",
+                        "note":  "OK"
+                    },
+                    {
+                        "method":  "GET",
+                        "path":  "/preview-requests/seed-preview-completed",
+                        "status":  200,
+                        "outcome":  "PASS",
+                        "note":  "OK"
+                    },
+                    {
+                        "method":  "POST",
+                        "path":  "/preview-requests",
+                        "status":  201,
+                        "outcome":  "PASS",
+                        "note":  "OK"
+                    },
+                    {
+                        "method":  "PATCH",
+                        "path":  "/preview-requests/cmo5cx0kw0021jirvnpjrdzi1",
+                        "status":  200,
+                        "outcome":  "PASS",
+                        "note":  "OK"
+                    },
+                    {
+                        "method":  "PATCH",
+                        "path":  "/preview-requests/cmo5cx0kw0021jirvnpjrdzi1/status",
+                        "status":  200,
+                        "outcome":  "PASS",
+                        "note":  "OK"
+                    },
+                    {
+                        "method":  "PATCH",
+                        "path":  "/preview-requests/cmo5cx0kw0021jirvnpjrdzi1/archive",
+                        "status":  200,
+                        "outcome":  "PASS",
+                        "note":  "OK"
+                    },
+                    {
+                        "method":  "GET",
+                        "path":  "/reports/revenue?date=2026-04-18",
+                        "status":  200,
+                        "outcome":  "PASS",
+                        "note":  "OK"
+                    },
+                    {
+                        "method":  "GET",
+                        "path":  "/reports/inventory-status",
+                        "status":  200,
+                        "outcome":  "PASS",
+                        "note":  "OK"
+                    },
+                    {
+                        "method":  "GET",
+                        "path":  "/reports/rental-analytics?startDate=2026-04-01\u0026endDate=2026-04-30",
+                        "status":  200,
+                        "outcome":  "PASS",
+                        "note":  "OK"
+                    },
+                    {
+                        "method":  "GET",
+                        "path":  "/reports/lead-conversion?startDate=2026-04-01\u0026endDate=2026-04-30",
+                        "status":  200,
+                        "outcome":  "PASS",
+                        "note":  "OK"
+                    },
+                    {
+                        "method":  "GET",
+                        "path":  "/reports/staff-performance",
+                        "status":  200,
+                        "outcome":  "PASS",
+                        "note":  "OK"
+                    }
+                ]
+}
