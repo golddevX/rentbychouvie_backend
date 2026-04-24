@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { ReceiptType } from '@prisma/client';
 import { PDFDocument, rgb } from 'pdf-lib';
 import { PrismaService } from '../prisma/prisma.service';
@@ -83,7 +83,10 @@ export class ReceiptsService {
     const pdfDoc = await PDFDocument.create();
     const page = pdfDoc.addPage([612, 792]);
     const { height } = page.getSize();
-    const customer = receipt.payment.rental.booking.customer;
+    const customer = receipt.payment.rental?.booking?.customer;
+    if (!customer) {
+      throw new BadRequestException('Receipt is not linked to a booking customer');
+    }
 
     page.drawText('RENTAL FASHION RECEIPT', {
       x: 50,

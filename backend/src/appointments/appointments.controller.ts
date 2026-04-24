@@ -4,11 +4,16 @@ import { AppointmentStatus, AppointmentType, UserRole } from '@prisma/client';
 import { Roles } from '../shared/decorators/roles.decorator';
 import { RolesGuard } from '../shared/guards/roles.guard';
 import { AppointmentsService } from './appointments.service';
+import { CurrentUser } from '../shared/decorators/current-user.decorator';
+import { LeadWorkflowService } from '../leads/lead-workflow.service';
 
 @Controller('appointments')
 @UseGuards(AuthGuard('jwt'))
 export class AppointmentsController {
-  constructor(private readonly appointmentsService: AppointmentsService) {}
+  constructor(
+    private readonly appointmentsService: AppointmentsService,
+    private readonly leadWorkflowService: LeadWorkflowService,
+  ) {}
 
   @Get()
   async findAll(
@@ -76,12 +81,30 @@ export class AppointmentsController {
   @Patch(':id/status')
   @UseGuards(RolesGuard)
   @Roles(UserRole.SALES, UserRole.OPERATOR, UserRole.MANAGER, UserRole.SUPER_ADMIN)
-  async updateStatus(@Param('id') id: string, @Body() body: { status: string }) {
+  async updateStatus(@Param('id') id: string, @Body() body: { status: string }, @CurrentUser() user: any) {
     if (!Object.values(AppointmentStatus).includes(body.status as AppointmentStatus)) {
       throw new BadRequestException('Invalid appointment status');
     }
 
+    if ((body.status as AppointmentStatus) === AppointmentStatus.COMPLETED) {
+      return this.leadWorkflowService.completeAppointment(id, user?.id ?? user?.sub);
+    }
+    if ((body.status as AppointmentStatus) === AppointmentStatus.CANCELLED || (body.status as AppointmentStatus) === AppointmentStatus.NO_SHOW) {
+      return this.leadWorkflowService.handleAppointmentCancelledOrNoShow(
+        id,
+        body.status as AppointmentStatus,
+        user?.id ?? user?.sub,
+      );
+    }
+
     return this.appointmentsService.updateStatus(id, body.status as AppointmentStatus);
+  }
+
+  @Post(':id/complete')
+  @UseGuards(RolesGuard)
+  @Roles(UserRole.SALES, UserRole.OPERATOR, UserRole.MANAGER, UserRole.SUPER_ADMIN)
+  async complete(@Param('id') id: string, @CurrentUser() user: any) {
+    return this.leadWorkflowService.completeAppointment(id, user?.id ?? user?.sub);
   }
 
   @Patch(':id/archive')

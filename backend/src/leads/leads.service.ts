@@ -1,37 +1,93 @@
-import { Injectable } from '@nestjs/common';
+import { BadRequestException, Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
-import { LeadStatus } from '@prisma/client';
+import { LeadAppointmentIntent, LeadDepositStatus, LeadStatus, ProductHoldStatus } from '@prisma/client';
 
 const ONE_HOUR_MS = 60 * 60 * 1000;
-const FIVE_HOURS_MS = 5 * ONE_HOUR_MS;
 
 @Injectable()
 export class LeadsService {
   constructor(private prisma: PrismaService) {}
 
-  async findAll(filters?: { status?: LeadStatus; assignedToId?: string }) {
-    return this.prisma.lead.findMany({
-      where: { ...filters, archivedAt: null },
-      include: {
-        customer: true,
-        assignedTo: {
-          select: { id: true, fullName: true, email: true },
-        },
-      },
-      orderBy: { createdAt: 'desc' },
+  private serializeRentalDates(pickupDate: Date, returnDate: Date) {
+    return JSON.stringify({
+      startDate: pickupDate.toISOString(),
+      endDate: returnDate.toISOString(),
     });
   }
 
-  async findById(id: string) {
-    return this.prisma.lead.findUnique({
-      where: { id, archivedAt: null },
-      include: {
-        customer: true,
-        assignedTo: {
-          select: { id: true, fullName: true, email: true },
+  private leadInclude() {
+    return {
+      customer: true,
+      assignedTo: {
+        select: { id: true, fullName: true, email: true },
+      },
+      product: true,
+      variant: true,
+      inventoryItem: {
+        include: {
+          product: true,
+          variant: true,
         },
       },
+      payments: {
+        where: { archivedAt: null },
+        orderBy: { createdAt: 'desc' as const },
+      },
+    };
+  }
+
+  private async decorateLead<T extends { appointmentId?: string | null; bookingId?: string | null; convertedToBookingId?: string | null }>(lead: T | null) {
+    if (!lead) return lead;
+    const bookingId = lead.bookingId ?? lead.convertedToBookingId ?? undefined;
+    const [appointment, booking] = await Promise.all([
+      lead.appointmentId
+        ? this.prisma.appointment.findFirst({
+            where: { id: lead.appointmentId, archivedAt: null },
+          })
+        : null,
+      bookingId
+        ? this.prisma.booking.findFirst({
+            where: { id: bookingId, archivedAt: null },
+            include: {
+              customer: true,
+              items: {
+                include: {
+                  product: true,
+                  variant: true,
+                  inventoryItem: true,
+                },
+              },
+              payments: true,
+              rental: { include: { payments: true } },
+            },
+          })
+        : null,
+    ]);
+
+    return {
+      ...lead,
+      appointment,
+      booking,
+    };
+  }
+
+  async findAll(filters?: { status?: LeadStatus; assignedToId?: string }) {
+    const leads = await this.prisma.lead.findMany({
+      where: { ...filters, archivedAt: null },
+      include: this.leadInclude(),
+      orderBy: { createdAt: 'desc' },
     });
+
+    return Promise.all(leads.map((lead) => this.decorateLead(lead)));
+  }
+
+  async findById(id: string) {
+    const lead = await this.prisma.lead.findFirst({
+      where: { id, archivedAt: null },
+      include: this.leadInclude(),
+    });
+
+    return this.decorateLead(lead);
   }
 
   async create(data: {
@@ -40,10 +96,22 @@ export class LeadsService {
     phone: string;
     source?: string;
     notes?: string;
+    productId?: string;
+    variantId?: string;
+    inventoryItemId?: string;
+    size?: string;
+    color?: string;
+    pickupDate?: string;
+    returnDate?: string;
+    appointmentIntent?: LeadAppointmentIntent;
+    quotedPrice?: number;
   }) {
     const customer = await this.prisma.customer.upsert({
       where: { email: data.email },
-      update: {},
+      update: {
+        name: data.name,
+        phone: data.phone,
+      },
       create: {
         email: data.email,
         name: data.name,
@@ -51,15 +119,113 @@ export class LeadsService {
       },
     });
 
+    let productContext:
+      | {
+          productId: string;
+          variantId?: string;
+          inventoryItemId?: string;
+          pickupDate: Date;
+          returnDate: Date;
+          appointmentIntent: LeadAppointmentIntent;
+          requestedSize?: string;
+          requestedColor?: string;
+        }
+      | undefined;
+
+    if (data.productId) {
+      if (!data.pickupDate || !data.returnDate || !data.appointmentIntent) {
+        throw new BadRequestException('Client lead requires product, desired dates, and appointment intent');
+      }
+
+      const pickupDate = new Date(data.pickupDate);
+      const returnDate = new Date(data.returnDate);
+      if (Number.isNaN(pickupDate.getTime()) || Number.isNaN(returnDate.getTime())) {
+        throw new BadRequestException('Invalid pickup or return date');
+      }
+      if (returnDate.getTime() <= pickupDate.getTime()) {
+        throw new BadRequestException('Return date must be after pickup date');
+      }
+
+      const product = await this.prisma.product.findFirst({
+        where: { id: data.productId, isActive: true, archivedAt: null },
+      });
+      if (!product) {
+        throw new BadRequestException('Product not found');
+      }
+
+      let variant:
+        | {
+            id: string;
+            size: string | null;
+            color: string | null;
+          }
+        | null = null;
+
+      if (data.variantId) {
+        variant = await this.prisma.productVariant.findFirst({
+          where: {
+            id: data.variantId,
+            productId: data.productId,
+            archivedAt: null,
+            isActive: true,
+          },
+          select: { id: true, size: true, color: true },
+        });
+        if (!variant) {
+          throw new BadRequestException('Variant not found');
+        }
+      }
+
+      if (data.inventoryItemId) {
+        const inventoryItem = await this.prisma.inventoryItem.findFirst({
+          where: {
+            id: data.inventoryItemId,
+            productId: data.productId,
+            variantId: data.variantId ?? undefined,
+            archivedAt: null,
+          },
+          select: { id: true },
+        });
+        if (!inventoryItem) {
+          throw new BadRequestException('Inventory item does not match selected product');
+        }
+      }
+
+      productContext = {
+        productId: data.productId,
+        variantId: data.variantId,
+        inventoryItemId: data.inventoryItemId,
+        pickupDate,
+        returnDate,
+        appointmentIntent: data.appointmentIntent,
+        requestedSize: data.size ?? variant?.size ?? undefined,
+        requestedColor: data.color ?? variant?.color ?? undefined,
+      };
+    }
+
     return this.prisma.lead.create({
       data: {
         customerId: customer.id,
         source: data.source || 'web',
         notes: data.notes,
-        status: LeadStatus.NEW,
+        status: productContext ? LeadStatus.PRODUCT_SELECTED : LeadStatus.NEW,
+        productHoldStatus: ProductHoldStatus.NONE,
+        depositStatus: LeadDepositStatus.NONE,
         contactDeadlineAt: new Date(Date.now() + ONE_HOUR_MS),
+        productId: productContext?.productId,
+        variantId: productContext?.variantId,
+        inventoryItemId: productContext?.inventoryItemId,
+        pickupDate: productContext?.pickupDate,
+        returnDate: productContext?.returnDate,
+        rentalDates: productContext
+          ? this.serializeRentalDates(productContext.pickupDate, productContext.returnDate)
+          : undefined,
+        appointmentIntent: productContext?.appointmentIntent,
+        requestedSize: productContext?.requestedSize,
+        requestedColor: productContext?.requestedColor,
+        quotedPrice: data.quotedPrice,
       },
-      include: { customer: true },
+      include: this.leadInclude(),
     });
   }
 
@@ -67,17 +233,7 @@ export class LeadsService {
     return this.prisma.lead.update({
       where: { id },
       data,
-      include: { customer: true, assignedTo: true },
-    });
-  }
-
-  async convertToBooking(leadId: string, bookingId: string) {
-    return this.prisma.lead.update({
-      where: { id: leadId },
-      data: {
-        status: LeadStatus.BOOKING_CREATED,
-        convertedToBookingId: bookingId,
-      },
+      include: this.leadInclude(),
     });
   }
 
@@ -88,65 +244,6 @@ export class LeadsService {
         assignedToId: userId,
         status: LeadStatus.CONTACTED,
         contactedAt: new Date(),
-      },
-    });
-  }
-
-  async updateStatus(id: string, status: LeadStatus) {
-    const nextData: any = { status };
-    if (status === LeadStatus.CONTACTED) {
-      nextData.contactedAt = new Date();
-    }
-    if (status === LeadStatus.DEPOSIT_REQUESTED) {
-      nextData.depositRequestedAt = new Date();
-      nextData.depositDeadlineAt = new Date(Date.now() + FIVE_HOURS_MS);
-    }
-    if (status === LeadStatus.DEPOSIT_RECEIVED) {
-      nextData.depositReceivedAt = new Date();
-    }
-
-    return this.prisma.lead.update({
-      where: { id },
-      data: nextData,
-      include: { customer: true, assignedTo: true },
-    });
-  }
-
-  async markContacted(id: string, notes?: string) {
-    const lead = await this.updateStatus(id, LeadStatus.CONTACTED);
-    if (!notes) return lead;
-
-    return this.prisma.lead.update({
-      where: { id },
-      data: { notes },
-      include: { customer: true, assignedTo: true },
-    });
-  }
-
-  async requestDeposit(id: string, input?: { quotedPrice?: number; depositDeadlineAt?: string }) {
-    return this.prisma.lead.update({
-      where: { id },
-      data: {
-        status: LeadStatus.DEPOSIT_REQUESTED,
-        quotedPrice: input?.quotedPrice,
-        depositRequestedAt: new Date(),
-        depositDeadlineAt: input?.depositDeadlineAt
-          ? new Date(input.depositDeadlineAt)
-          : new Date(Date.now() + FIVE_HOURS_MS),
-      },
-      include: { customer: true, assignedTo: true },
-    });
-  }
-
-  async releaseExpiredDepositHolds() {
-    return this.prisma.lead.updateMany({
-      where: {
-        status: LeadStatus.DEPOSIT_REQUESTED,
-        depositDeadlineAt: { lt: new Date() },
-      },
-      data: {
-        status: LeadStatus.LOST,
-        lostReason: 'Deposit not received within 5 hours; schedule released',
       },
     });
   }

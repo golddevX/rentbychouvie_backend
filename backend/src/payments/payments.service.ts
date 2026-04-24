@@ -50,7 +50,7 @@ export class PaymentsService {
       }
     }
 
-    if (payment.type === PaymentType.BOOKING_DEPOSIT || payment.type === PaymentType.RENTAL_PAYMENT) {
+    if ((payment.type === PaymentType.BOOKING_DEPOSIT || payment.type === PaymentType.RENTAL_PAYMENT) && payment.rental) {
       await this.prisma.rental.update({
         where: { id: payment.rental.id },
         data: { status: 'CONFIRMED' },
@@ -146,7 +146,7 @@ export class PaymentsService {
       entity: 'Payment',
       entityId: payment.id,
       paymentId: payment.id,
-      rentalId: payment.rentalId,
+      rentalId: payment.rentalId ?? undefined,
       bookingId: payment.bookingId ?? undefined,
       actorId: data.processedById,
       summary: `Created ${payment.type} payment for ${payment.amount}`,
@@ -181,7 +181,7 @@ export class PaymentsService {
       entity: 'Payment',
       entityId: payment.id,
       paymentId: payment.id,
-      rentalId: payment.rentalId,
+      rentalId: payment.rentalId ?? undefined,
       bookingId: current.bookingId ?? current.rental?.booking?.id,
       actorId: processedById,
       summary: `Processed payment ${payment.id}`,
@@ -215,7 +215,7 @@ export class PaymentsService {
       idempotencyKey,
       metadata: {
         paymentId: payment.id,
-        rentalId: payment.rentalId,
+        rentalId: payment.rentalId ?? undefined,
       },
     });
 
@@ -248,7 +248,7 @@ export class PaymentsService {
       entity: 'PaymentTransaction',
       entityId: transaction.id,
       paymentId: payment.id,
-      rentalId: payment.rentalId,
+      rentalId: payment.rentalId ?? undefined,
       bookingId: payment.bookingId ?? payment.rental?.booking?.id,
       summary: `Initialized ${provider} checkout for payment ${payment.id}`,
       after: transaction,
@@ -631,7 +631,7 @@ export class PaymentsService {
       entity: 'Payment',
       entityId: paymentId,
       paymentId,
-      rentalId: payment.rentalId,
+      rentalId: payment.rentalId ?? undefined,
       bookingId: payment.bookingId ?? payment.rental?.booking?.id,
       actorId,
       summary: `Refunded ${refundAmount} from payment ${paymentId}`,
@@ -655,7 +655,7 @@ export class PaymentsService {
       entity: 'Payment',
       entityId: paymentId,
       paymentId,
-      rentalId: after.rentalId,
+      rentalId: after.rentalId ?? undefined,
       bookingId: after.bookingId ?? undefined,
       actorId,
       summary: `Payment status changed to ${status}`,
@@ -678,7 +678,7 @@ export class PaymentsService {
       entity: 'Payment',
       entityId: paymentId,
       paymentId,
-      rentalId: after.rentalId,
+      rentalId: after.rentalId ?? undefined,
       bookingId: after.bookingId ?? undefined,
       actorId,
       summary: 'Archived payment',
@@ -691,6 +691,9 @@ export class PaymentsService {
 
   async generateReceipt(paymentId: string, createdById: string) {
     const payment = await this.findById(paymentId);
+    if (!payment.rental?.booking?.customer) {
+      throw new BadRequestException('Receipt requires a booking-linked payment');
+    }
 
     const pdfDoc = await PDFDocument.create();
     const page = pdfDoc.addPage([612, 792]);
@@ -774,7 +777,7 @@ export class PaymentsService {
       entityId: receipt.id,
       paymentId,
       bookingId: payment.bookingId ?? payment.rental?.booking?.id,
-      rentalId: payment.rentalId,
+      rentalId: payment.rentalId ?? undefined,
       actorId: createdById,
       summary: `Generated receipt ${receipt.receiptNumber}`,
       after: receipt,

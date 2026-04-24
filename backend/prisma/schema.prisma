@@ -25,14 +25,40 @@ enum UserRole {
 enum LeadStatus {
   NEW
   CONTACTED
+  PRODUCT_SELECTED
   DEPOSIT_REQUESTED
   DEPOSIT_RECEIVED
+  APPOINTMENT_CREATED
+  APPOINTMENT_COMPLETED
   BOOKING_CREATED
+  DEPOSIT_EXPIRED
+  CANCELLED
   LOST
   QUOTED
   NEGOTIATING
   REJECTED
   WON
+}
+
+enum ProductHoldStatus {
+  NONE
+  PENDING_DEPOSIT
+  RESERVED
+  RELEASED
+  CONVERTED_TO_BOOKING
+}
+
+enum LeadAppointmentIntent {
+  FITTING
+  PICKUP
+  DELIVERY
+}
+
+enum LeadDepositStatus {
+  NONE
+  REQUESTED
+  RECEIVED
+  EXPIRED
 }
 
 enum BookingStatus {
@@ -99,6 +125,7 @@ enum AppointmentType {
   CONSULTATION
   FITTING
   PICKUP
+  DELIVERY_PREPARATION
   RETURN
 }
 
@@ -107,6 +134,7 @@ enum AppointmentStatus {
   CHECKED_IN
   COMPLETED
   CANCELLED
+  NO_SHOW
 }
 
 enum RentalOrderStatus {
@@ -283,22 +311,40 @@ model Lead {
   customer   Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
 
   status        LeadStatus @default(NEW)
+  productHoldStatus ProductHoldStatus @default(NONE)
+  depositStatus LeadDepositStatus @default(NONE)
   source        String? // web, direct, referral, etc.
   notes         String?
   quotedPrice   Float?
+  depositAmountRequired Float @default(0)
+  depositAmountPaid Float @default(0)
   requiredItems Int?
   rentalDates   String? // JSON: { startDate, endDate }
+  productId     String?
+  product       Product? @relation(fields: [productId], references: [id], onDelete: SetNull)
+  variantId     String?
+  variant       ProductVariant? @relation(fields: [variantId], references: [id], onDelete: SetNull)
+  inventoryItemId String?
+  inventoryItem InventoryItem? @relation(fields: [inventoryItemId], references: [id], onDelete: SetNull)
+  requestedSize String?
+  requestedColor String?
+  pickupDate DateTime?
+  returnDate DateTime?
+  appointmentIntent LeadAppointmentIntent?
   contactDeadlineAt DateTime?
   contactedAt        DateTime?
   depositRequestedAt DateTime?
   depositDeadlineAt  DateTime?
   depositReceivedAt  DateTime?
   lostReason         String?
+  appointmentId      String?
+  bookingId          String?
 
   assignedToId String?
   assignedTo   User?   @relation(fields: [assignedToId], references: [id])
 
   convertedToBookingId String?
+  payments Payment[]
 
   createdAt  DateTime  @default(now())
   updatedAt  DateTime  @updatedAt
@@ -306,6 +352,10 @@ model Lead {
 
   @@index([customerId])
   @@index([assignedToId])
+  @@index([status, productHoldStatus])
+  @@index([productId])
+  @@index([variantId])
+  @@index([inventoryItemId])
   @@map("leads")
 }
 
@@ -331,6 +381,7 @@ model Product {
   bookingItems   BookingItem[]
   variants       ProductVariant[]
   rentalOrderItems RentalOrderItem[]
+  leads Lead[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -355,6 +406,7 @@ model ProductVariant {
 
   inventoryItems InventoryItem[]
   bookingItems    BookingItem[]
+  leads Lead[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -386,6 +438,7 @@ model InventoryItem {
   rentals      Rental[]      @relation("inventoryItems")
   appointmentReservations Appointment[] @relation("appointmentResourceItem")
   rentalOrderItems RentalOrderItem[]
+  leads Lead[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -620,10 +673,12 @@ model Rental {
 
 model Payment {
   id       String @id @default(cuid())
-  rentalId String
-  rental   Rental @relation(fields: [rentalId], references: [id], onDelete: Cascade)
+  rentalId String?
+  rental   Rental? @relation(fields: [rentalId], references: [id], onDelete: SetNull)
   bookingId String?
   booking   Booking? @relation(fields: [bookingId], references: [id], onDelete: SetNull)
+  leadId String?
+  lead   Lead? @relation(fields: [leadId], references: [id], onDelete: SetNull)
 
   status         PaymentStatus @default(PENDING)
   type           PaymentType   @default(RENTAL_PAYMENT)
@@ -658,6 +713,7 @@ model Payment {
 
   @@index([rentalId])
   @@index([bookingId])
+  @@index([leadId])
   @@index([status])
   @@index([createdAt])
   @@map("payments")

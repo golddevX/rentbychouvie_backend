@@ -12,6 +12,11 @@ export class AuthService {
     private configService: ConfigService,
   ) {}
 
+  private parseJwtExpiry(value?: string) {
+    if (!value) return '7d';
+    return /^\d+$/.test(value) ? Number(value) : value;
+  }
+
   async login(email: string, password: string) {
     const user = await this.prisma.user.findUnique({ where: { email } });
 
@@ -34,7 +39,7 @@ export class AuthService {
       { sub: user.id, email: user.email },
       {
         secret: this.configService.get('JWT_REFRESH_SECRET'),
-        expiresIn: this.configService.get('JWT_REFRESH_EXPIRATION'),
+        expiresIn: this.parseJwtExpiry(this.configService.get('JWT_REFRESH_EXPIRATION')),
       },
     );
 

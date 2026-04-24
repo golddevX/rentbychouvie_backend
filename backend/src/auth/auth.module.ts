@@ -7,6 +7,11 @@ import { AuthController } from './auth.controller';
 import { JwtStrategy } from './strategies/jwt.strategy';
 import { PrismaModule } from '../prisma/prisma.module';
 
+function parseJwtExpiry(value?: string) {
+  if (!value) return '1d';
+  return /^\d+$/.test(value) ? Number(value) : value;
+}
+
 @Module({
   imports: [
     PassportModule,
@@ -15,7 +20,7 @@ import { PrismaModule } from '../prisma/prisma.module';
       useFactory: async (configService: ConfigService) => ({
         secret: configService.get<string>('JWT_SECRET'),
         signOptions: {
-          expiresIn: configService.get<string>('JWT_EXPIRATION'),
+          expiresIn: parseJwtExpiry(configService.get<string>('JWT_EXPIRATION')),
         },
       }),
     }),

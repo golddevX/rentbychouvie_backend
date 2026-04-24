@@ -1,5 +1,5 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
-import { AuditAction, BookingStatus, InventoryItem, PaymentMethod, Prisma, Product, ProductVariant } from '@prisma/client';
+import { AuditAction, BookingStatus, InventoryItem, LeadStatus, PaymentMethod, Prisma, Product, ProductHoldStatus, ProductVariant } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { RentalPricingService } from '../pricing/rental-pricing.service';
 import { AuditDisputesService } from '../audit-disputes/audit-disputes.service';
@@ -68,6 +68,7 @@ export class BookingsService {
     }>,
     startDate: Date,
     endDate: Date,
+    leadId?: string,
   ) {
     const exactIds = items
       .map((item) => item.inventoryItemId)
@@ -96,6 +97,14 @@ export class BookingsService {
         throw new BadRequestException('One or more inventory items are already locked for this schedule');
       }
 
+      const reservedByLeads = await this.findReservedLeadItemIds(exactIds, startDate, endDate);
+      const conflictingLeadItems = [...reservedByLeads.entries()]
+        .filter(([, reservedLeadId]) => reservedLeadId !== leadId)
+        .map(([inventoryItemId]) => inventoryItemId);
+      if (conflictingLeadItems.length > 0) {
+        throw new BadRequestException('One or more inventory items are already reserved by another lead');
+      }
+
       exactItems.forEach((item) => resolved.set(item.id, item));
     }
 
@@ -110,7 +119,7 @@ export class BookingsService {
           productId: requested.productId,
           variantId: requested.variantId,
           archivedAt: null,
-          status: { notIn: ['DAMAGED', 'RETIRED', 'MAINTENANCE'] },
+          status: { notIn: ['DAMAGED', 'RETIRED', 'MAINTENANCE', 'RESERVED'] },
           id: { notIn: [...resolved.keys()] },
         },
         include: { product: true, variant: true },
@@ -131,6 +140,44 @@ export class BookingsService {
     }
 
     return [...resolved.values()];
+  }
+
+  private async findReservedLeadItemIds(
+    inventoryItemIds: string[],
+    startDate: Date,
+    endDate: Date,
+  ) {
+    if (inventoryItemIds.length === 0) {
+      return new Map<string, string>();
+    }
+
+    const leads = await this.prisma.lead.findMany({
+      where: {
+        archivedAt: null,
+        inventoryItemId: { in: inventoryItemIds },
+        status: {
+          in: [
+            LeadStatus.DEPOSIT_RECEIVED,
+            LeadStatus.APPOINTMENT_CREATED,
+            LeadStatus.APPOINTMENT_COMPLETED,
+          ],
+        },
+        productHoldStatus: ProductHoldStatus.RESERVED,
+        bookingId: null,
+        pickupDate: { lt: endDate },
+        returnDate: { gt: startDate },
+      },
+      select: {
+        id: true,
+        inventoryItemId: true,
+      },
+    });
+
+    return new Map(
+      leads
+        .filter((lead) => Boolean(lead.inventoryItemId))
+        .map((lead) => [lead.inventoryItemId!, lead.id]),
+    );
   }
 
   async findAll(filters?: { customerId?: string; status?: BookingStatus }) {
@@ -199,6 +246,29 @@ export class BookingsService {
     }>;
     createdById?: string;
   }) {
+    if (data.leadId) {
+      const lead = await this.prisma.lead.findFirst({
+        where: { id: data.leadId, archivedAt: null },
+        select: {
+          id: true,
+          status: true,
+          bookingId: true,
+        },
+      });
+
+      if (!lead) {
+        throw new BadRequestException('Lead not found');
+      }
+      if (lead.bookingId || lead.status === LeadStatus.BOOKING_CREATED) {
+        throw new BadRequestException('Lead has already been converted to booking');
+      }
+      if (lead.status !== LeadStatus.APPOINTMENT_COMPLETED) {
+        throw new BadRequestException('Booking can only be created after appointment is completed');
+      }
+
+      throw new BadRequestException('Use the lead workflow conversion endpoint to create a booking from lead');
+    }
+
     const pickupDate = new Date(data.pickupDate ?? data.startDate);
     const returnDate = new Date(data.returnDate ?? data.endDate);
     const startDate = pickupDate;
@@ -210,7 +280,7 @@ export class BookingsService {
       throw new BadRequestException('createdById is required');
     }
 
-    const inventoryItems = await this.resolveRequestedItems(data.items, startDate, endDate);
+    const inventoryItems = await this.resolveRequestedItems(data.items, startDate, endDate, data.leadId);
 
     const itemById = new Map(inventoryItems.map((item) => [item.id, item]));
     const basePrices = inventoryItems.map((item) => Number(item.product.price));
@@ -313,7 +383,7 @@ export class BookingsService {
 
     return this.prisma.inventoryItem.findMany({
       where: {
-        status: { notIn: ['DAMAGED', 'RETIRED', 'MAINTENANCE'] },
+        status: { notIn: ['DAMAGED', 'RETIRED', 'MAINTENANCE', 'RESERVED'] },
         id: { notIn: lockedItems.map((item) => item.inventoryItemId) },
       },
       include: {

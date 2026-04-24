@@ -66,7 +66,8 @@ export class AppointmentsService {
   private mapStatusFromLifecycle(lifecycleStatus: AppointmentLifecycle): AppointmentStatus {
     if (lifecycleStatus === 'checked_in') return AppointmentStatus.CHECKED_IN;
     if (lifecycleStatus === 'completed') return AppointmentStatus.COMPLETED;
-    if (lifecycleStatus === 'cancelled' || lifecycleStatus === 'no_show') return AppointmentStatus.CANCELLED;
+    if (lifecycleStatus === 'cancelled') return AppointmentStatus.CANCELLED;
+    if (lifecycleStatus === 'no_show') return AppointmentStatus.NO_SHOW;
     return AppointmentStatus.SCHEDULED;
   }
 
@@ -108,7 +109,7 @@ export class AppointmentsService {
     });
 
     const blocked = candidates.some((item) => {
-      if (item.status === AppointmentStatus.CANCELLED) return false;
+      if (item.status === AppointmentStatus.CANCELLED || item.status === AppointmentStatus.NO_SHOW) return false;
       if (['cancelled', 'no_show'].includes(item.lifecycleStatus ?? '')) return false;
 
       const existingStart = item.startTime ?? item.scheduledAt;
@@ -314,6 +315,8 @@ export class AppointmentsService {
               ? 'completed'
               : status === AppointmentStatus.CANCELLED
                 ? 'cancelled'
+                : status === AppointmentStatus.NO_SHOW
+                  ? 'no_show'
                 : 'confirmed',
       },
       include: { customer: true, staff: true },
@@ -365,7 +368,7 @@ export class AppointmentsService {
     });
 
     const blockedBy = candidates
-      .filter((item) => item.status !== AppointmentStatus.CANCELLED && !['cancelled', 'no_show'].includes(item.lifecycleStatus ?? ''))
+      .filter((item) => item.status !== AppointmentStatus.CANCELLED && item.status !== AppointmentStatus.NO_SHOW && !['cancelled', 'no_show'].includes(item.lifecycleStatus ?? ''))
       .filter((item) => {
         const itemStart = item.startTime ?? item.scheduledAt;
         const itemEnd = item.endTime ?? new Date(itemStart.getTime() + item.durationMinutes * 60000);
