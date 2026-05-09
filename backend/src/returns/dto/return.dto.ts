@@ -1,11 +1,39 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { ArrayMinSize, IsArray, IsBoolean, IsISO8601, IsNumber, IsOptional, IsString, Min } from 'class-validator';
+import { ArrayMinSize, IsArray, IsBoolean, IsISO8601, IsNumber, IsOptional, IsString, Min, ValidateNested } from 'class-validator';
+import { Type } from 'class-transformer';
+
+export class ReturnProductInspectionDto {
+  @ApiProperty({ example: 'clu7inv0000008l43a9d6qk2' })
+  @IsString()
+  inventoryItemId!: string;
+
+  @ApiProperty({ enum: ['good', 'dirty', 'damaged', 'missing_accessory', 'missing_item'], example: 'good' })
+  @IsString()
+  condition!: 'good' | 'dirty' | 'damaged' | 'missing_accessory' | 'missing_item';
+
+  @ApiProperty({ type: [String], example: ['https://cdn.example.com/returns/product-1.jpg'], required: false })
+  @IsOptional()
+  @IsArray()
+  images?: string[];
+
+  @ApiProperty({ example: 150000, minimum: 0, required: false })
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  damageFee?: number;
+
+  @ApiProperty({ example: 50000, minimum: 0, required: false })
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  accessoryFee?: number;
+}
 
 export class InspectReturnDto {
   @ApiProperty({
     enum: ['clean', 'dirty', 'damaged', 'incomplete'],
     example: 'damaged',
-    description: 'Observed return condition used by the pricing engine to suggest fees.',
+    description: 'Observed return condition used for inspection and operational status. Damage fees are entered manually.',
   })
   @IsString()
   condition!: 'clean' | 'dirty' | 'damaged' | 'incomplete';
@@ -24,18 +52,16 @@ export class InspectReturnDto {
   @IsNumber()
   @Min(0)
   declaredDamageFee?: number;
+
+  @ApiProperty({ type: [ReturnProductInspectionDto], required: false })
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => ReturnProductInspectionDto)
+  items?: ReturnProductInspectionDto[];
 }
 
 export class SettleReturnDto {
-  @ApiProperty({
-    type: [String],
-    example: ['QR-DRS-RED-M-0001', 'QR-BAG-0007'],
-    description: 'Returned QR codes. Settlement fails if scanned items do not match the booking.',
-  })
-  @IsArray()
-  @ArrayMinSize(1)
-  qrCodes!: string[];
-
   @ApiProperty({ enum: ['clean', 'dirty', 'damaged', 'incomplete'], example: 'damaged' })
   @IsString()
   condition!: 'clean' | 'dirty' | 'damaged' | 'incomplete';
@@ -49,20 +75,38 @@ export class SettleReturnDto {
   @IsOptional()
   @IsNumber()
   @Min(0)
-  damageFee?: number;
+  lateFee?: number;
 
-  @ApiProperty({ type: [Number], example: [50000], required: false })
+  @ApiProperty({ example: 50000, minimum: 0, required: false })
   @IsOptional()
-  @IsArray()
-  accessoryLostValues?: number[];
+  @IsNumber()
+  @Min(0)
+  dirtyFee?: number;
 
-  @ApiProperty({ example: true, required: false })
+  @ApiProperty({ example: 25000, minimum: 0, required: false })
   @IsOptional()
-  @IsBoolean()
-  affectsNextBooking?: boolean;
+  @IsNumber()
+  @Min(0)
+  otherFee?: number;
 
   @ApiProperty({ example: 'Refund customer after deducting repair cost.', required: false })
   @IsOptional()
   @IsString()
   notes?: string;
+
+  @ApiProperty({
+    example: true,
+    required: false,
+    description: 'When true, remaining rental is allowed to be deducted from the held deposit during settlement.',
+  })
+  @IsOptional()
+  @IsBoolean()
+  applyRentalToDeposit?: boolean;
+
+  @ApiProperty({ type: [ReturnProductInspectionDto] })
+  @IsArray()
+  @ArrayMinSize(1)
+  @ValidateNested({ each: true })
+  @Type(() => ReturnProductInspectionDto)
+  items!: ReturnProductInspectionDto[];
 }

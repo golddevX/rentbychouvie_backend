@@ -1,6 +1,7 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { PreviewRequestStatus, Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { buildPaginatedResult, resolvePagination } from '../shared/pagination';
 
 @Injectable()
 export class PreviewRequestsService {
@@ -10,21 +11,65 @@ export class PreviewRequestsService {
     status?: PreviewRequestStatus;
     assignedToId?: string;
     includeArchived?: boolean;
+    page?: number;
+    limit?: number;
+    search?: string;
+    sortBy?: string;
+    sortOrder?: 'asc' | 'desc';
+    dateFrom?: string;
+    dateTo?: string;
   }) {
+    const { page, limit, skip, take } = resolvePagination(filters);
+    const sortBy = ['createdAt', 'updatedAt', 'garmentName'].includes(String(filters?.sortBy))
+      ? String(filters?.sortBy)
+      : 'createdAt';
+    const sortOrder = filters?.sortOrder === 'asc' ? 'asc' : 'desc';
+    const normalizedSearch = String(filters?.search ?? '').trim();
+    const dateFrom = filters?.dateFrom ? new Date(filters.dateFrom) : undefined;
+    const dateTo = filters?.dateTo ? new Date(filters.dateTo) : undefined;
     const where: Prisma.PreviewRequestWhereInput = {
       archivedAt: filters?.includeArchived ? undefined : null,
       status: filters?.status,
       assignedToId: filters?.assignedToId,
+      ...(normalizedSearch
+        ? {
+            OR: [
+              { garmentName: { contains: normalizedSearch, mode: 'insensitive' } },
+              { notes: { contains: normalizedSearch, mode: 'insensitive' } },
+              { resultNotes: { contains: normalizedSearch, mode: 'insensitive' } },
+              { customer: { is: { name: { contains: normalizedSearch, mode: 'insensitive' } } } },
+              { customer: { is: { email: { contains: normalizedSearch, mode: 'insensitive' } } } },
+              { customer: { is: { phone: { contains: normalizedSearch, mode: 'insensitive' } } } },
+            ],
+          }
+        : {}),
+      ...(dateFrom || dateTo
+        ? {
+            createdAt: {
+              ...(dateFrom ? { gte: dateFrom } : {}),
+              ...(dateTo ? { lte: dateTo } : {}),
+            },
+          }
+        : {}),
     };
 
-    return this.prisma.previewRequest.findMany({
-      where,
-      include: {
-        customer: true,
-        assignedTo: { select: { id: true, fullName: true, email: true, role: true } },
-      },
-      orderBy: { createdAt: 'desc' },
-    });
+    const include = {
+      customer: true,
+      assignedTo: { select: { id: true, fullName: true, email: true, role: true } },
+    } satisfies Prisma.PreviewRequestInclude;
+
+    const [total, data] = await Promise.all([
+      this.prisma.previewRequest.count({ where }),
+      this.prisma.previewRequest.findMany({
+        where,
+        include,
+        orderBy: { [sortBy]: sortOrder },
+        skip,
+        take,
+      }),
+    ]);
+
+    return buildPaginatedResult(data, { page, limit, total });
   }
 
   async findById(id: string) {

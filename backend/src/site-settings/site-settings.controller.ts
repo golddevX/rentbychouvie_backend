@@ -14,11 +14,24 @@ export class SiteSettingsController {
     return this.siteSettingsService.getHomepageSettings();
   }
 
+  @Get('client')
+  @UseGuards(AuthGuard('jwt'), RolesGuard)
+  @Roles(UserRole.SUPER_ADMIN, UserRole.MANAGER)
+  async getClientSettings() {
+    return this.siteSettingsService.getClientSettings();
+  }
+
   @Patch('homepage')
   @UseGuards(AuthGuard('jwt'), RolesGuard)
   @Roles(UserRole.SUPER_ADMIN, UserRole.MANAGER)
   async updateHomepageSettings(@Body() body: Record<string, unknown>) {
     return this.siteSettingsService.updateHomepageSettings(body);
   }
-}
 
+  @Patch('client')
+  @UseGuards(AuthGuard('jwt'), RolesGuard)
+  @Roles(UserRole.SUPER_ADMIN, UserRole.MANAGER)
+  async updateClientSettings(@Body() body: Record<string, unknown>) {
+    return this.siteSettingsService.updateClientSettings(body);
+  }
+}

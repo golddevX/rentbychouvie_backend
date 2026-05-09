@@ -1,12 +1,23 @@
-import { Controller, Post, Body } from '@nestjs/common';
+import { Controller, Get, Post, Body, UseGuards } from '@nestjs/common';
+import { AuthGuard } from '@nestjs/passport';
 import { ApiBody, ApiOkResponse, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { AuthService } from './auth.service';
 import { LoginDto, LoginResponseDto, RefreshTokenDto } from './dto/auth.dto';
+import { CurrentUser } from '../shared/decorators/current-user.decorator';
 
 @ApiTags('Auth')
 @Controller('auth')
 export class AuthController {
   constructor(private readonly authService: AuthService) {}
+
+  @Get('me')
+  @UseGuards(AuthGuard('jwt'))
+  @ApiOperation({ summary: 'Get current authenticated user profile' })
+  async me(@CurrentUser() user: any) {
+    return {
+      data: await this.authService.getProfile(user?.id ?? user?.sub),
+    };
+  }
 
   @Post('login')
   @ApiOperation({
@@ -19,7 +30,9 @@ export class AuthController {
     description: 'JWT tokens and role-aware user profile.',
   })
   async login(@Body() body: LoginDto) {
-    return this.authService.login(body.email, body.password);
+    return {
+      data: await this.authService.login(body.email, body.password),
+    };
   }
 
   @Post('refresh')
@@ -33,7 +46,9 @@ export class AuthController {
     },
   })
   async refresh(@Body() body: RefreshTokenDto) {
-    return this.authService.refreshToken(body.refreshToken);
+    return {
+      data: await this.authService.refreshToken(body.refreshToken),
+    };
   }
 
   @Post('logout')

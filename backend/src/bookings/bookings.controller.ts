@@ -22,13 +22,35 @@ import {
   RecordBookingDepositDto,
   UpdateBookingStatusDto,
 } from './dto/booking.dto';
+import { PaymentsService } from '../payments/payments.service';
+import { CollectBookingPaymentDto } from '../payments/dto/payment.dto';
+import { FinalizeReturnSettlementDto } from '../payments/dto/payment.dto';
+import { PaginationQueryDto } from '../shared/dto/pagination-query.dto';
+
+const LEGACY_BOOKING_STATUS_ALIASES = ['LATE_RETURN', 'DAMAGE_REVIEW'] as const;
+type LegacyBookingStatusAlias = (typeof LEGACY_BOOKING_STATUS_ALIASES)[number];
+
+function normalizeBookingStatusFilter(value?: string): BookingStatus | LegacyBookingStatusAlias | null {
+  const normalized = String(value ?? '').trim().toUpperCase();
+  if (!normalized) return null;
+  if (Object.values(BookingStatus).includes(normalized as BookingStatus)) {
+    return normalized as BookingStatus;
+  }
+  if (LEGACY_BOOKING_STATUS_ALIASES.includes(normalized as LegacyBookingStatusAlias)) {
+    return normalized as LegacyBookingStatusAlias;
+  }
+  return null;
+}
 
 @ApiTags('Booking')
 @ApiBearerAuth()
 @Controller('bookings')
 @UseGuards(AuthGuard('jwt'))
 export class BookingsController {
-  constructor(private readonly bookingsService: BookingsService) {}
+  constructor(
+    private readonly bookingsService: BookingsService,
+    private readonly paymentsService: PaymentsService,
+  ) {}
 
   @Get()
   @ApiOperation({
@@ -36,13 +58,48 @@ export class BookingsController {
     description: 'Operations view of bookings with customer, reserved items, rental, and payments.',
   })
   @ApiQuery({ name: 'status', enum: BookingStatus, required: false })
-  async findAll(@Query('status') status?: string) {
-    if (status && !Object.values(BookingStatus).includes(status as BookingStatus)) {
+  async findAll(
+    @Query() query: PaginationQueryDto,
+    @Query('status') status?: string,
+    @Query('statuses') statuses?: string,
+  ) {
+    const normalizedStatus = normalizeBookingStatusFilter(status);
+    if (status && !normalizedStatus) {
       throw new BadRequestException('Invalid booking status');
     }
+    const parsedStatuses = statuses
+      ? statuses.split(',').map((item) => item.trim()).filter(Boolean)
+      : [];
+    const normalizedStatuses = parsedStatuses
+      .map((value) => normalizeBookingStatusFilter(value))
+      .filter((value): value is BookingStatus | LegacyBookingStatusAlias => Boolean(value));
+    if (parsedStatuses.length !== normalizedStatuses.length) {
+      throw new BadRequestException('Invalid booking statuses');
+    }
+    const legacyStatuses = normalizedStatuses.filter(
+      (value): value is LegacyBookingStatusAlias => LEGACY_BOOKING_STATUS_ALIASES.includes(value as LegacyBookingStatusAlias),
+    );
+    const directStatuses = normalizedStatuses.filter(
+      (value): value is BookingStatus => Object.values(BookingStatus).includes(value as BookingStatus),
+    );
+    const directStatus = Object.values(BookingStatus).includes(normalizedStatus as BookingStatus)
+      ? normalizedStatus as BookingStatus
+      : undefined;
+    const singleLegacyStatus = normalizedStatus && LEGACY_BOOKING_STATUS_ALIASES.includes(normalizedStatus as LegacyBookingStatusAlias)
+      ? normalizedStatus as LegacyBookingStatusAlias
+      : undefined;
 
     return this.bookingsService.findAll({
-      status: status as BookingStatus | undefined,
+      page: query.page,
+      limit: query.limit,
+      search: query.search,
+      dateFrom: query.dateFrom,
+      dateTo: query.dateTo,
+      sortBy: query.sortBy ?? 'createdAt',
+      sortOrder: query.sortOrder ?? 'desc',
+      status: directStatus,
+      statuses: directStatuses,
+      legacyStatuses: [...legacyStatuses, ...(singleLegacyStatus ? [singleLegacyStatus] : [])],
     });
   }
 
@@ -72,6 +129,14 @@ export class BookingsController {
     return this.bookingsService.findById(id);
   }
 
+  @Get(':id/payment-summary')
+  @UseGuards(RolesGuard)
+  @Roles(UserRole.CASHIER, UserRole.OPERATOR, UserRole.MANAGER, UserRole.SUPER_ADMIN)
+  @ApiOperation({ summary: 'Get booking payment summary' })
+  async paymentSummary(@Param('id') id: string) {
+    return this.paymentsService.getPaymentSummaryForBooking(id);
+  }
+
   @Post()
   @UseGuards(RolesGuard)
   @Roles(UserRole.SALES, UserRole.MANAGER, UserRole.SUPER_ADMIN)
@@ -87,8 +152,8 @@ export class BookingsController {
         id: 'clu7book0000008l49ra8vg12',
         status: 'DEPOSIT_REQUESTED',
         totalPrice: 850000,
-        bookingDepositRequired: 425000,
-        securityDepositRequired: 500000,
+        bookingDepositRequired: 500000,
+        securityDepositRequired: 1000000,
         items: [{ inventoryItemId: 'clu7inv0000008l4xj3g6fdj' }],
       },
     },
@@ -142,7 +207,7 @@ export class BookingsController {
   @ApiOperation({
     summary: 'Record booking deposit and lock inventory',
     description:
-      'When cumulative deposit reaches bookingDepositRequired, the backend re-checks item overlaps, marks items RESERVED, creates/updates the rental, and confirms the booking.',
+      'When cumulative security deposit reaches the configured threshold, the backend re-checks item overlaps, marks items RESERVED, creates/updates the rental, and confirms the booking.',
   })
   @ApiBody({ type: RecordBookingDepositDto })
   async recordBookingDeposit(
@@ -174,6 +239,60 @@ export class BookingsController {
       body.paymentMethod ?? PaymentMethod.CASH,
       user?.id ?? user?.sub,
     );
+  }
+
+  @Post(':id/collect-rental-payment')
+  @UseGuards(RolesGuard)
+  @Roles(UserRole.CASHIER, UserRole.MANAGER, UserRole.SUPER_ADMIN)
+  @ApiOperation({ summary: 'Collect remaining rental payment for booking' })
+  @ApiBody({ type: CollectBookingPaymentDto })
+  async collectRentalPayment(
+    @Param('id') id: string,
+    @Body() body: CollectBookingPaymentDto,
+    @CurrentUser() user: any,
+  ) {
+    return this.paymentsService.collectRentalPayment(id, {
+      amount: body.amount,
+      paymentMethod: body.paymentMethod,
+      description: body.description,
+      processedById: user?.id ?? user?.sub,
+    });
+  }
+
+  @Post(':id/collect-security-deposit')
+  @UseGuards(RolesGuard)
+  @Roles(UserRole.CASHIER, UserRole.MANAGER, UserRole.SUPER_ADMIN)
+  @ApiOperation({ summary: 'Collect security deposit for booking' })
+  @ApiBody({ type: CollectBookingPaymentDto })
+  async collectSecurityDeposit(
+    @Param('id') id: string,
+    @Body() body: CollectBookingPaymentDto,
+    @CurrentUser() user: any,
+  ) {
+    return this.paymentsService.collectSecurityDeposit(id, {
+      amount: body.amount,
+      paymentMethod: body.paymentMethod,
+      description: body.description,
+      processedById: user?.id ?? user?.sub,
+    });
+  }
+
+  @Post(':id/finalize-return-settlement')
+  @UseGuards(RolesGuard)
+  @Roles(UserRole.CASHIER, UserRole.MANAGER, UserRole.SUPER_ADMIN)
+  @ApiOperation({ summary: 'Finalize return settlement and post payment history' })
+  @ApiBody({ type: FinalizeReturnSettlementDto })
+  async finalizeReturnSettlement(
+    @Param('id') id: string,
+    @Body() body: FinalizeReturnSettlementDto,
+    @CurrentUser() user: any,
+  ) {
+    return this.paymentsService.finalizeReturnSettlement(id, {
+      paymentMethod: body.paymentMethod,
+      description: body.description,
+      applyRentalToDeposit: body.applyRentalToDeposit,
+      processedById: user?.id ?? user?.sub,
+    });
   }
 
   @Patch(':id/archive')

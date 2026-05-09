@@ -6,6 +6,7 @@ import {
   Prisma,
 } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { buildPaginatedResult, resolvePagination } from '../shared/pagination';
 
 type PrismaClientLike = PrismaService | Prisma.TransactionClient;
 
@@ -76,21 +77,63 @@ export class AuditDisputesService {
     bookingId?: string;
     paymentId?: string;
     inventoryItemId?: string;
+    page?: number;
+    limit?: number;
+    search?: string;
+    sortBy?: string;
+    sortOrder?: 'asc' | 'desc';
+    dateFrom?: string;
+    dateTo?: string;
   }) {
-    return this.prisma.auditLog.findMany({
-      where: {
-        entity: filters?.entity,
-        entityId: filters?.entityId,
-        bookingId: filters?.bookingId,
-        paymentId: filters?.paymentId,
-        inventoryItemId: filters?.inventoryItemId,
-      },
-      include: {
-        actor: { select: { id: true, fullName: true, email: true, role: true } },
-      },
-      orderBy: { createdAt: 'desc' },
-      take: 150,
-    });
+    const { page, limit, skip, take } = resolvePagination(filters);
+    const sortBy = ['createdAt'].includes(String(filters?.sortBy))
+      ? String(filters?.sortBy)
+      : 'createdAt';
+    const sortOrder = filters?.sortOrder === 'asc' ? 'asc' : 'desc';
+    const normalizedSearch = String(filters?.search ?? '').trim();
+    const dateFrom = filters?.dateFrom ? new Date(filters.dateFrom) : undefined;
+    const dateTo = filters?.dateTo ? new Date(filters.dateTo) : undefined;
+    const where: Prisma.AuditLogWhereInput = {
+      entity: filters?.entity,
+      entityId: filters?.entityId,
+      bookingId: filters?.bookingId,
+      paymentId: filters?.paymentId,
+      inventoryItemId: filters?.inventoryItemId,
+      ...(normalizedSearch
+        ? {
+            OR: [
+              { entity: { contains: normalizedSearch, mode: 'insensitive' } },
+              { entityId: { contains: normalizedSearch, mode: 'insensitive' } },
+              { summary: { contains: normalizedSearch, mode: 'insensitive' } },
+            ],
+          }
+        : {}),
+      ...(dateFrom || dateTo
+        ? {
+            createdAt: {
+              ...(dateFrom ? { gte: dateFrom } : {}),
+              ...(dateTo ? { lte: dateTo } : {}),
+            },
+          }
+        : {}),
+    };
+
+    const include = {
+      actor: { select: { id: true, fullName: true, email: true, role: true } },
+    } satisfies Prisma.AuditLogInclude;
+
+    const [total, data] = await Promise.all([
+      this.prisma.auditLog.count({ where }),
+      this.prisma.auditLog.findMany({
+        where,
+        include,
+        orderBy: { [sortBy]: sortOrder },
+        skip,
+        take,
+      }),
+    ]);
+
+    return buildPaginatedResult(data, { page, limit, total });
   }
 
   async createDispute(input: {
@@ -173,20 +216,64 @@ export class AuditDisputesService {
     };
   }
 
-  async findDisputes(filters?: { status?: DisputeStatus | string; priority?: string; bookingId?: string }) {
-    return this.prisma.dispute.findMany({
-      where: {
-        status: filters?.status as DisputeStatus | undefined,
-        priority: filters?.priority as any,
-        bookingId: filters?.bookingId,
-      },
-      include: this.disputeInclude(),
-      orderBy: [
-        { status: 'asc' },
-        { priority: 'desc' },
-        { createdAt: 'desc' },
-      ],
-    });
+  async findDisputes(filters?: {
+    status?: DisputeStatus | string;
+    priority?: string;
+    bookingId?: string;
+    page?: number;
+    limit?: number;
+    search?: string;
+    sortBy?: string;
+    sortOrder?: 'asc' | 'desc';
+    dateFrom?: string;
+    dateTo?: string;
+  }) {
+    const { page, limit, skip, take } = resolvePagination(filters);
+    const sortBy = ['createdAt', 'dueAt', 'requestedAmount', 'approvedAmount'].includes(String(filters?.sortBy))
+      ? String(filters?.sortBy)
+      : 'createdAt';
+    const sortOrder = filters?.sortOrder === 'asc' ? 'asc' : 'desc';
+    const normalizedSearch = String(filters?.search ?? '').trim();
+    const dateFrom = filters?.dateFrom ? new Date(filters.dateFrom) : undefined;
+    const dateTo = filters?.dateTo ? new Date(filters.dateTo) : undefined;
+    const where: Prisma.DisputeWhereInput = {
+      status: filters?.status as DisputeStatus | undefined,
+      priority: filters?.priority as any,
+      bookingId: filters?.bookingId,
+      ...(normalizedSearch
+        ? {
+            OR: [
+              { caseNumber: { contains: normalizedSearch, mode: 'insensitive' } },
+              { title: { contains: normalizedSearch, mode: 'insensitive' } },
+              { summary: { contains: normalizedSearch, mode: 'insensitive' } },
+              { bookingId: { contains: normalizedSearch, mode: 'insensitive' } },
+              { paymentId: { contains: normalizedSearch, mode: 'insensitive' } },
+              { inventoryItemId: { contains: normalizedSearch, mode: 'insensitive' } },
+            ],
+          }
+        : {}),
+      ...(dateFrom || dateTo
+        ? {
+            createdAt: {
+              ...(dateFrom ? { gte: dateFrom } : {}),
+              ...(dateTo ? { lte: dateTo } : {}),
+            },
+          }
+        : {}),
+    };
+
+    const [total, data] = await Promise.all([
+      this.prisma.dispute.count({ where }),
+      this.prisma.dispute.findMany({
+        where,
+        include: this.disputeInclude(),
+        orderBy: { [sortBy]: sortOrder },
+        skip,
+        take,
+      }),
+    ]);
+
+    return buildPaginatedResult(data, { page, limit, total });
   }
 
   async findDisputeById(id: string) {

@@ -4,6 +4,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import * as QRCode from 'qrcode';
 import { v4 as uuidv4 } from 'uuid';
 import { AuditDisputesService } from '../audit-disputes/audit-disputes.service';
+import { buildPaginatedResult, resolvePagination } from '../shared/pagination';
 
 @Injectable()
 export class InventoryService {
@@ -15,16 +16,47 @@ export class InventoryService {
   async findAllItems(filters?: {
     productId?: string;
     status?: InventoryItemStatus;
+    page?: number;
+    limit?: number;
+    search?: string;
+    sortBy?: string;
+    sortOrder?: 'asc' | 'desc';
   }) {
-    const where: Prisma.InventoryItemWhereInput = { ...filters, archivedAt: null };
+    const { page, limit, skip, take } = resolvePagination(filters);
+    const sortBy = ['createdAt', 'updatedAt', 'serialNumber'].includes(String(filters?.sortBy))
+      ? String(filters?.sortBy)
+      : 'createdAt';
+    const sortOrder = filters?.sortOrder === 'asc' ? 'asc' : 'desc';
+    const normalizedSearch = String(filters?.search ?? '').trim();
+    const where: Prisma.InventoryItemWhereInput = {
+      archivedAt: null,
+      productId: filters?.productId,
+      status: filters?.status,
+      ...(normalizedSearch
+        ? {
+            OR: [
+              { serialNumber: { contains: normalizedSearch, mode: 'insensitive' } },
+              { qrCode: { contains: normalizedSearch, mode: 'insensitive' } },
+              { product: { is: { name: { contains: normalizedSearch, mode: 'insensitive' } } } },
+            ],
+          }
+        : {}),
+    };
 
-    return this.prisma.inventoryItem.findMany({
-      where,
-      include: {
-        product: true,
-      },
-      orderBy: { createdAt: 'desc' },
-    });
+    const [total, data] = await Promise.all([
+      this.prisma.inventoryItem.count({ where }),
+      this.prisma.inventoryItem.findMany({
+        where,
+        include: {
+          product: true,
+        },
+        orderBy: { [sortBy]: sortOrder },
+        skip,
+        take,
+      }),
+    ]);
+
+    return buildPaginatedResult(data, { page, limit, total });
   }
 
   async findItemById(id: string) {
@@ -135,6 +167,9 @@ export class InventoryService {
         id: item.id,
         productId: item.productId,
         productName: item.product.name,
+        productImage: item.product.image ?? null,
+        productValue: Number(item.product.productValue ?? item.product.price ?? 0),
+        rentalPrice: Number(item.product.rentalPrice ?? item.product.price ?? 0),
         variantName: item.variant?.name ?? null,
         size: item.variant?.size ?? null,
         color: item.variant?.color ?? null,

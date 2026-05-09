@@ -1,6 +1,6 @@
 import { ApiProperty } from '@nestjs/swagger';
 import { LeadAppointmentIntent, LeadStatus, PaymentMethod } from '@prisma/client';
-import { IsEmail, IsEnum, IsISO8601, IsNumber, IsOptional, IsString, Min } from 'class-validator';
+import { IsArray, IsEmail, IsEnum, IsISO8601, IsNumber, IsOptional, IsString, Min } from 'class-validator';
 
 export class CreateLeadDto {
   @ApiProperty({ example: 'linh.nguyen@example.com' })
@@ -33,15 +33,16 @@ export class CreateLeadDto {
   @IsString()
   productId?: string;
 
+  @ApiProperty({ example: ['clu7prd0000008l43a9d6qk2', 'clu7prd0000008l43a9d6qk3'], required: false })
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  productIds?: string[];
+
   @ApiProperty({ example: 'clu7var0000008l4czg5as9f', required: false })
   @IsOptional()
   @IsString()
   variantId?: string;
-
-  @ApiProperty({ example: 'clu7inv0000008l4xj3g6fdj', required: false })
-  @IsOptional()
-  @IsString()
-  inventoryItemId?: string;
 
   @ApiProperty({ example: 'M', required: false })
   @IsOptional()
@@ -96,6 +97,23 @@ export class RequestLeadDepositDto {
   @Min(0)
   depositAmount?: number;
 
+  @ApiProperty({ example: 50, required: false })
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  depositRate?: number;
+
+  @ApiProperty({ enum: ['percent', 'custom_amount'], example: 'percent', required: false })
+  @IsOptional()
+  @IsString()
+  depositType?: 'percent' | 'custom_amount';
+
+  @ApiProperty({ example: 180000, required: false })
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  customDepositAmount?: number;
+
   @ApiProperty({
     example: '2026-04-22T14:00:00.000Z',
     description: 'Optional explicit deadline. Defaults to five hours from request time.',
@@ -108,18 +126,20 @@ export class RequestLeadDepositDto {
 
 export class SelectLeadProductDto {
   @ApiProperty({ example: 'clu7prd0000008l43a9d6qk2' })
+  @IsOptional()
   @IsString()
-  productId!: string;
+  productId?: string;
+
+  @ApiProperty({ example: ['clu7prd0000008l43a9d6qk2', 'clu7prd0000008l43a9d6qk3'], required: false })
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  productIds?: string[];
 
   @ApiProperty({ example: 'clu7var0000008l4czg5as9f', required: false })
   @IsOptional()
   @IsString()
   variantId?: string;
-
-  @ApiProperty({ example: 'clu7inv0000008l4xj3g6fdj', required: false })
-  @IsOptional()
-  @IsString()
-  inventoryItemId?: string;
 
   @ApiProperty({ example: 'M', required: false })
   @IsOptional()
@@ -169,6 +189,23 @@ export class ReceiveLeadDepositDto {
   @IsOptional()
   @IsString()
   description?: string;
+
+  @ApiProperty({ example: 50, required: false })
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  depositRate?: number;
+
+  @ApiProperty({ enum: ['percent', 'custom_amount'], example: 'percent', required: false })
+  @IsOptional()
+  @IsString()
+  depositType?: 'percent' | 'custom_amount';
+
+  @ApiProperty({ example: 180000, required: false })
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  customDepositAmount?: number;
 }
 
 export class UpdateLeadDto {

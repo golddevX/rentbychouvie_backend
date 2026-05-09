@@ -1,6 +1,6 @@
 import { ApiProperty } from '@nestjs/swagger';
 import { PaymentGateway, PaymentMethod, PaymentStatus, PaymentType } from '@prisma/client';
-import { IsEnum, IsNumber, IsOptional, IsString, Min } from 'class-validator';
+import { IsBoolean, IsEnum, IsNumber, IsOptional, IsString, Min } from 'class-validator';
 
 export class CreatePaymentDto {
   @ApiProperty({ example: 'clu7rental0000008l47b3mtyx9' })
@@ -43,7 +43,7 @@ export class CreatePaymentDto {
   @IsEnum(PaymentMethod)
   paymentMethod!: PaymentMethod;
 
-  @ApiProperty({ example: 'Booking deposit collected at counter.', required: false })
+  @ApiProperty({ example: 'Security deposit collected at counter.', required: false })
   @IsOptional()
   @IsString()
   description?: string;
@@ -61,6 +61,42 @@ export class RefundPaymentDto {
   @IsNumber()
   @Min(0)
   refundAmount!: number;
+}
+
+export class CollectBookingPaymentDto {
+  @ApiProperty({ example: 450000, minimum: 0 })
+  @IsNumber()
+  @Min(0)
+  amount!: number;
+
+  @ApiProperty({ enum: PaymentMethod, example: PaymentMethod.CASH })
+  @IsEnum(PaymentMethod)
+  paymentMethod!: PaymentMethod;
+
+  @ApiProperty({ example: 'Collected at cashier desk.', required: false })
+  @IsOptional()
+  @IsString()
+  description?: string;
+}
+
+export class FinalizeReturnSettlementDto {
+  @ApiProperty({ enum: PaymentMethod, example: PaymentMethod.CASH })
+  @IsEnum(PaymentMethod)
+  paymentMethod!: PaymentMethod;
+
+  @ApiProperty({ example: 'Settled return charges and refunded remaining deposit.', required: false })
+  @IsOptional()
+  @IsString()
+  description?: string;
+
+  @ApiProperty({
+    example: true,
+    required: false,
+    description: 'When true, remaining rental can be deducted from held deposit during return settlement.',
+  })
+  @IsOptional()
+  @IsBoolean()
+  applyRentalToDeposit?: boolean;
 }
 
 export class InitializePaymentDto {
@@ -95,7 +131,7 @@ export class InitializeBookingPaymentDto extends InitializePaymentDto {
     enum: ['deposit', 'remaining', 'full'],
     example: 'deposit',
     required: false,
-    description: 'deposit locks inventory; remaining/full settles rental balance.',
+    description: 'deposit collects security deposit; remaining/full settles the rental balance.',
   })
   @IsOptional()
   @IsString()

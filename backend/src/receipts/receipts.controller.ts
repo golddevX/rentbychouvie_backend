@@ -4,6 +4,7 @@ import { ReceiptType, UserRole } from '@prisma/client';
 import { Roles } from '../shared/decorators/roles.decorator';
 import { RolesGuard } from '../shared/guards/roles.guard';
 import { ReceiptsService } from './receipts.service';
+import { PaginationQueryDto } from '../shared/dto/pagination-query.dto';
 
 @Controller('receipts')
 @UseGuards(AuthGuard('jwt'))
@@ -11,8 +12,20 @@ export class ReceiptsController {
   constructor(private readonly receiptsService: ReceiptsService) {}
 
   @Get()
-  async findAll(@Query('includeArchived') includeArchived?: string) {
-    return this.receiptsService.findAll(includeArchived === 'true');
+  async findAll(
+    @Query() query: PaginationQueryDto,
+    @Query('includeArchived') includeArchived?: string,
+  ) {
+    return this.receiptsService.findAll({
+      includeArchived: includeArchived === 'true',
+      page: query.page,
+      limit: query.limit,
+      search: query.search,
+      sortBy: query.sortBy ?? 'createdAt',
+      sortOrder: query.sortOrder ?? 'desc',
+      dateFrom: query.dateFrom,
+      dateTo: query.dateTo,
+    });
   }
 
   @Get(':id')

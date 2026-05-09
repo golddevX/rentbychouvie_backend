@@ -4,9 +4,10 @@ import { PricingModule } from '../pricing/pricing.module';
 import { ReturnsController } from './returns.controller';
 import { ReturnsService } from './returns.service';
 import { AuditDisputesModule } from '../audit-disputes/audit-disputes.module';
+import { PaymentsModule } from '../payments/payments.module';
 
 @Module({
-  imports: [PrismaModule, PricingModule, AuditDisputesModule],
+  imports: [PrismaModule, PricingModule, AuditDisputesModule, PaymentsModule],
   controllers: [ReturnsController],
   providers: [ReturnsService],
 })

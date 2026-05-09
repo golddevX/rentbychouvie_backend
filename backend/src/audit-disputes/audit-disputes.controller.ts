@@ -12,6 +12,7 @@ import {
   UpdateDisputeDto,
 } from './dto/audit-dispute.dto';
 import { AuditDisputesService } from './audit-disputes.service';
+import { PaginationQueryDto } from '../shared/dto/pagination-query.dto';
 
 @ApiTags('Audit & Disputes')
 @ApiBearerAuth()
@@ -32,6 +33,7 @@ export class AuditDisputesController {
   @ApiQuery({ name: 'paymentId', required: false })
   @ApiQuery({ name: 'inventoryItemId', required: false })
   async findAuditLogs(
+    @Query() query: PaginationQueryDto,
     @Query('entity') entity?: string,
     @Query('entityId') entityId?: string,
     @Query('bookingId') bookingId?: string,
@@ -39,6 +41,13 @@ export class AuditDisputesController {
     @Query('inventoryItemId') inventoryItemId?: string,
   ) {
     return this.auditDisputesService.findAuditLogs({
+      page: query.page,
+      limit: query.limit,
+      search: query.search,
+      sortBy: query.sortBy ?? 'createdAt',
+      sortOrder: query.sortOrder ?? 'desc',
+      dateFrom: query.dateFrom,
+      dateTo: query.dateTo,
       entity,
       entityId,
       bookingId,
@@ -57,6 +66,7 @@ export class AuditDisputesController {
   @ApiQuery({ name: 'priority', enum: DisputePriority, required: false })
   @ApiQuery({ name: 'bookingId', required: false })
   async findDisputes(
+    @Query() query: PaginationQueryDto,
     @Query('status') status?: string,
     @Query('priority') priority?: string,
     @Query('bookingId') bookingId?: string,
@@ -68,7 +78,18 @@ export class AuditDisputesController {
       throw new BadRequestException('Invalid dispute priority');
     }
 
-    return this.auditDisputesService.findDisputes({ status, priority, bookingId });
+    return this.auditDisputesService.findDisputes({
+      page: query.page,
+      limit: query.limit,
+      search: query.search,
+      sortBy: query.sortBy ?? 'createdAt',
+      sortOrder: query.sortOrder ?? 'desc',
+      dateFrom: query.dateFrom,
+      dateTo: query.dateTo,
+      status,
+      priority,
+      bookingId,
+    });
   }
 
   @Get('disputes/:id')

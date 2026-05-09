@@ -6,6 +6,7 @@ import { RolesGuard } from '../shared/guards/roles.guard';
 import { AppointmentsService } from './appointments.service';
 import { CurrentUser } from '../shared/decorators/current-user.decorator';
 import { LeadWorkflowService } from '../leads/lead-workflow.service';
+import { PaginationQueryDto } from '../shared/dto/pagination-query.dto';
 
 @Controller('appointments')
 @UseGuards(AuthGuard('jwt'))
@@ -17,6 +18,7 @@ export class AppointmentsController {
 
   @Get()
   async findAll(
+    @Query() query: PaginationQueryDto,
     @Query('status') status?: string,
     @Query('type') type?: string,
     @Query('staffId') staffId?: string,
@@ -31,6 +33,13 @@ export class AppointmentsController {
     }
 
     return this.appointmentsService.findAll({
+      page: query.page,
+      limit: query.limit,
+      search: query.search,
+      dateFrom: query.dateFrom,
+      dateTo: query.dateTo,
+      sortBy: query.sortBy ?? 'startTime',
+      sortOrder: query.sortOrder ?? 'asc',
       status: status as AppointmentStatus | undefined,
       type: type as AppointmentType | undefined,
       staffId,
@@ -105,6 +114,28 @@ export class AppointmentsController {
   @Roles(UserRole.SALES, UserRole.OPERATOR, UserRole.MANAGER, UserRole.SUPER_ADMIN)
   async complete(@Param('id') id: string, @CurrentUser() user: any) {
     return this.leadWorkflowService.completeAppointment(id, user?.id ?? user?.sub);
+  }
+
+  @Post(':id/cancel')
+  @UseGuards(RolesGuard)
+  @Roles(UserRole.SALES, UserRole.OPERATOR, UserRole.MANAGER, UserRole.SUPER_ADMIN)
+  async cancel(@Param('id') id: string, @CurrentUser() user: any) {
+    return this.leadWorkflowService.handleAppointmentCancelledOrNoShow(
+      id,
+      AppointmentStatus.CANCELLED,
+      user?.id ?? user?.sub,
+    );
+  }
+
+  @Post(':id/no-show')
+  @UseGuards(RolesGuard)
+  @Roles(UserRole.SALES, UserRole.OPERATOR, UserRole.MANAGER, UserRole.SUPER_ADMIN)
+  async noShow(@Param('id') id: string, @CurrentUser() user: any) {
+    return this.leadWorkflowService.handleAppointmentCancelledOrNoShow(
+      id,
+      AppointmentStatus.NO_SHOW,
+      user?.id ?? user?.sub,
+    );
   }
 
   @Patch(':id/archive')

@@ -1,13 +1,15 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
-import { AuditAction, BookingStatus, RentalStatus } from '@prisma/client';
+import { AuditAction, BookingStatus, InventoryItemStatus, ProductStatus, RentalStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditDisputesService } from '../audit-disputes/audit-disputes.service';
+import { PaymentsService } from '../payments/payments.service';
 
 @Injectable()
 export class PickupService {
   constructor(
     private prisma: PrismaService,
     private auditDisputesService: AuditDisputesService,
+    private paymentsService: PaymentsService,
   ) {}
 
   private async findBooking(bookingId: string) {
@@ -15,11 +17,38 @@ export class PickupService {
       where: { id: bookingId, archivedAt: null },
       include: {
         customer: true,
+        lead: {
+          include: {
+            product: true,
+            inventoryItem: {
+              include: {
+                product: true,
+                variant: true,
+              },
+            },
+            items: {
+              include: {
+                product: true,
+                inventoryItem: {
+                  include: {
+                    product: true,
+                    variant: true,
+                  },
+                },
+              },
+            },
+          },
+        },
         items: {
           include: {
             product: true,
             variant: true,
-            inventoryItem: true,
+            inventoryItem: {
+              include: {
+                product: true,
+                variant: true,
+              },
+            },
           },
         },
         rental: {
@@ -34,67 +63,147 @@ export class PickupService {
     return booking;
   }
 
+  private bookingProducts(booking: Awaited<ReturnType<PickupService['findBooking']>>) {
+    if (booking.items.length > 0) {
+      return booking.items
+        .map((item) => ({
+          id: item.inventoryItemId ?? item.productId,
+          productId: item.productId,
+          qrCode: item.inventoryItem?.qrCode ?? (item.product as any)?.qrCode ?? item.productId,
+          name: item.product?.name ?? item.inventoryItem?.product?.name ?? '-',
+          status: item.inventoryItem?.status ?? 'AVAILABLE',
+        }));
+    }
+    const leadItems = (booking.lead?.items ?? []).filter((item) => String(item.status ?? '').toUpperCase() !== 'REMOVED');
+    if (leadItems.length > 0) {
+      return leadItems.map((item) => ({
+        id: item.inventoryItemId ?? item.productId,
+        productId: item.productId,
+        qrCode: item.inventoryItem?.qrCode ?? (item.product as any)?.qrCode ?? item.productId,
+        name: item.product?.name ?? item.inventoryItem?.product?.name ?? '-',
+        status: item.inventoryItem?.status ?? 'AVAILABLE',
+      }));
+    }
+    return booking.lead?.inventoryItem
+      ? [{
+          id: booking.lead.inventoryItem.id,
+          productId: booking.lead.productId ?? booking.lead.inventoryItem.productId,
+          qrCode: booking.lead.inventoryItem.qrCode,
+          name: booking.lead.product?.name ?? booking.lead.inventoryItem.product.name,
+          status: booking.lead.inventoryItem.status,
+        }]
+      : [];
+  }
+
+  private expectedProducts(booking: Awaited<ReturnType<PickupService['findBooking']>>) {
+    return this.bookingProducts(booking).map((product) => ({
+      id: product.id,
+      productId: product.productId,
+      qrCode: product.qrCode || product.id,
+      name: product.name,
+      status: String(product.status ?? 'available').toUpperCase(),
+    }));
+  }
+
   async scan(bookingId: string, qrCode: string) {
     const booking = await this.findBooking(bookingId);
-    const item = await this.prisma.inventoryItem.findUnique({
-      where: { qrCode },
-      include: { product: true, variant: true },
-    });
-
-    if (!item) {
-      throw new NotFoundException('Scanned QR code does not belong to an active inventory item');
+    const expectedProducts = this.expectedProducts(booking);
+    if (!expectedProducts.length) {
+      throw new BadRequestException('Booking does not have products ready for pickup');
     }
 
-    const expectedItemIds = new Set(booking.items.map((bookingItem) => bookingItem.inventoryItemId));
-    const matched = expectedItemIds.has(item.id);
+    const matchedProduct = expectedProducts.find((product) => product.qrCode === qrCode);
+    const matched = Boolean(matchedProduct);
+    let message = matched ? 'QR matches the expected product' : 'QR does not match this booking';
+
+    if (!matched) {
+      message = 'QR does not match this booking';
+    } else if (matchedProduct!.status === InventoryItemStatus.RENTED) {
+      message = 'Product is already rented and cannot be handed over again';
+    } else if (matchedProduct!.status === InventoryItemStatus.MAINTENANCE || matchedProduct!.status === InventoryItemStatus.DAMAGED) {
+      message = 'Product is under maintenance and blocked for pickup';
+    } else if (matchedProduct!.status !== InventoryItemStatus.AVAILABLE && matchedProduct!.status !== InventoryItemStatus.RESERVED) {
+      message = 'Product is missing from pickup-ready stock';
+    }
 
     return {
       bookingId: booking.id,
       bookingStatus: booking.status,
       matched,
-      message: matched
-        ? 'QR matches an expected pickup item'
-        : 'QR does not match this booking',
+      message,
       scannedItem: {
-        id: item.id,
-        qrCode: item.qrCode,
-        status: item.status,
-        productName: item.product.name,
-        variantName: item.variant?.name ?? null,
+        id: matchedProduct?.id ?? qrCode,
+        qrCode,
+        status: String(matchedProduct?.status ?? 'available').toLowerCase(),
+        productName: matchedProduct?.name ?? qrCode,
+        variantName: null,
       },
-      expectedItems: booking.items.map((bookingItem) => ({
-        itemId: bookingItem.inventoryItemId,
-        qrCode: bookingItem.inventoryItem.qrCode,
-        productName: bookingItem.product.name,
-        variantName: bookingItem.variant?.name ?? null,
+      expectedItems: expectedProducts.map((product) => ({
+        itemId: product.id,
+        qrCode: product.qrCode,
+        productName: product.name,
+        variantName: null,
       })),
     };
   }
 
-  async confirm(bookingId: string, qrCodes: string[], pickedUpById?: string, conditionNotes?: string) {
+  async confirm(bookingId: string, images: string[], pickedUpById?: string, conditionNotes?: string) {
     const booking = await this.findBooking(bookingId);
-    const pickupReadyStatuses: BookingStatus[] = [
-      BookingStatus.CONFIRMED,
-      BookingStatus.SCHEDULED_PICKUP,
-    ];
-    if (!pickupReadyStatuses.includes(booking.status)) {
-      throw new BadRequestException('Booking must be confirmed before pickup');
-    }
-
-    const scannedItems = await this.prisma.inventoryItem.findMany({
-      where: { qrCode: { in: qrCodes } },
-    });
-    if (scannedItems.length !== qrCodes.length) {
-      throw new BadRequestException('One or more scanned QR codes were not found');
-    }
-
-    const expectedItemIds = new Set(booking.items.map((item) => item.inventoryItemId));
-    const scannedItemIds = new Set(scannedItems.map((item) => item.id));
     if (
-      expectedItemIds.size !== scannedItemIds.size ||
-      [...expectedItemIds].some((id) => !scannedItemIds.has(id))
+      booking.status === BookingStatus.CANCELLED ||
+      booking.status === BookingStatus.PICKED_UP ||
+      booking.status === BookingStatus.COMPLETED
     ) {
-      throw new BadRequestException('Pickup confirmation requires every expected item and no extra items');
+      throw new BadRequestException('Booking is not eligible for pickup');
+    }
+
+    const summary = await this.paymentsService.getPaymentSummaryForBooking(booking.id);
+    if (!summary.canPickup) {
+      const pickupBlockedReasons = Array.isArray((summary as any).pickupBlockedReasons)
+        ? ((summary as any).pickupBlockedReasons as string[])
+        : [];
+      await this.auditDisputesService.log({
+        action: AuditAction.STATUS_CHANGE,
+        entity: 'PickupDesk',
+        entityId: booking.id,
+        bookingId: booking.id,
+        rentalId: booking.rental?.id ?? undefined,
+        actorId: pickedUpById,
+        summary: `Blocked pickup for booking ${booking.id} because payment requirements are not satisfied`,
+        after: {
+          rentalRemaining: summary.rentalRemaining,
+          securityDepositOutstanding: (summary as any).securityDepositRemainingForPickup,
+          bookingStatus: booking.status,
+        },
+        metadata: {
+          step: 'pickup_blocked_unpaid',
+          canPickup: summary.canPickup,
+          pickupBlockedReasons: (summary as any).pickupBlockedReasons ?? [],
+        },
+      });
+
+      if (pickupBlockedReasons.includes('rental_unpaid')) {
+        throw new BadRequestException('Rental payment is still outstanding for this rental order');
+      }
+      if (
+        pickupBlockedReasons.includes('deposit_missing')
+        || Number((summary as any).securityDepositRemainingForPickup ?? 0) > 0
+      ) {
+        throw new BadRequestException('Security deposit is still required before pickup');
+      }
+      throw new BadRequestException('Booking is not yet ready for pickup');
+    }
+
+    const expectedProducts = this.expectedProducts(booking);
+    if (!expectedProducts.length) {
+      throw new BadRequestException('Booking does not have products ready for pickup');
+    }
+    if (!Array.isArray(images) || images.length < 4) {
+      throw new BadRequestException('Handover requires 4 evidence images before confirmation');
+    }
+    const blockedProducts = expectedProducts.filter((product) => product.status === InventoryItemStatus.MAINTENANCE || product.status === InventoryItemStatus.DAMAGED);
+    if (blockedProducts.length > 0) {
+      throw new BadRequestException(`One or more products are blocked for pickup: ${blockedProducts.map((product) => product.name).join(', ')}`);
     }
 
     return this.prisma.$transaction(async (tx) => {
@@ -106,9 +215,6 @@ export class PickupService {
             status: RentalStatus.PICKED_UP,
             scheduledPickupDate: booking.pickupDate ?? booking.startDate,
             scheduledReturnDate: booking.returnDate ?? booking.endDate,
-            inventoryItems: {
-              connect: booking.items.map((item) => ({ id: item.inventoryItemId })),
-            },
           },
         }));
 
@@ -130,10 +236,58 @@ export class PickupService {
         where: { id: booking.id },
         data: { status: BookingStatus.PICKED_UP },
       });
-      await tx.inventoryItem.updateMany({
-        where: { id: { in: [...expectedItemIds] } },
-        data: { status: 'RENTED' },
+      await tx.handoverRecord.upsert({
+        where: { bookingId: booking.id },
+        update: {
+          images: JSON.stringify(images),
+          note: conditionNotes,
+          createdById: pickedUpById,
+        },
+        create: {
+          bookingId: booking.id,
+          images: JSON.stringify(images),
+          note: conditionNotes,
+          createdById: pickedUpById,
+        },
       });
+      const inventoryItemIds = expectedProducts.map((product) => product.id);
+      await tx.inventoryItem.updateMany({
+        where: { id: { in: inventoryItemIds } },
+        data: { status: InventoryItemStatus.RENTED },
+      });
+      await tx.product.updateMany({
+        where: {
+          id: {
+            in: [...new Set(expectedProducts.map((product) => product.productId))],
+          },
+        },
+        data: { status: ProductStatus.RENTED },
+      });
+      await tx.bookingItem.updateMany({
+        where: { bookingId: booking.id, inventoryItemId: { in: inventoryItemIds } },
+        data: {
+          pickupStatus: 'PICKED_UP' as any,
+          handoverImages: JSON.stringify(images),
+        },
+      });
+
+      await this.auditDisputesService.log({
+        action: AuditAction.UPDATE,
+        entity: 'HandoverRecord',
+        entityId: booking.id,
+        bookingId: booking.id,
+        rentalId: updatedRental.id,
+        actorId: pickedUpById,
+        summary: `Uploaded handover evidence for booking ${booking.id}`,
+        after: {
+          imageCount: images.length,
+          note: conditionNotes,
+        },
+        metadata: {
+          step: 'upload_handover_images',
+          images,
+        },
+      }, tx);
 
       await this.auditDisputesService.log({
         action: AuditAction.PICKUP_CONFIRMED,
@@ -146,8 +300,8 @@ export class PickupService {
         before: booking,
         after: updatedRental,
         metadata: {
-          qrCodes,
-          inventoryItemIds: [...expectedItemIds],
+          images,
+          inventoryItemIds: expectedProducts.map((product) => product.id),
           conditionNotes,
         },
       }, tx);

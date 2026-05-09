@@ -4,6 +4,7 @@ import { PreviewRequestStatus, UserRole } from '@prisma/client';
 import { Roles } from '../shared/decorators/roles.decorator';
 import { RolesGuard } from '../shared/guards/roles.guard';
 import { PreviewRequestsService } from './preview-requests.service';
+import { PaginationQueryDto } from '../shared/dto/pagination-query.dto';
 
 @Controller('preview-requests')
 @UseGuards(AuthGuard('jwt'))
@@ -12,6 +13,7 @@ export class PreviewRequestsController {
 
   @Get()
   async findAll(
+    @Query() query: PaginationQueryDto,
     @Query('status') status?: string,
     @Query('assignedToId') assignedToId?: string,
     @Query('includeArchived') includeArchived?: string,
@@ -21,6 +23,13 @@ export class PreviewRequestsController {
     }
 
     return this.previewRequestsService.findAll({
+      page: query.page,
+      limit: query.limit,
+      search: query.search,
+      sortBy: query.sortBy ?? 'createdAt',
+      sortOrder: query.sortOrder ?? 'desc',
+      dateFrom: query.dateFrom,
+      dateTo: query.dateTo,
       status: status as PreviewRequestStatus | undefined,
       assignedToId,
       includeArchived: includeArchived === 'true',

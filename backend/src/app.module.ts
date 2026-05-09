@@ -21,6 +21,7 @@ import { PickupModule } from './pickup/pickup.module';
 import { ReturnsModule } from './returns/returns.module';
 import { ScanModule } from './scan/scan.module';
 import { AuditDisputesModule } from './audit-disputes/audit-disputes.module';
+import { PublicModule } from './public/public.module';
 
 @Module({
   imports: [
@@ -48,6 +49,7 @@ import { AuditDisputesModule } from './audit-disputes/audit-disputes.module';
     ReturnsModule,
     ScanModule,
     AuditDisputesModule,
+    PublicModule,
   ],
   controllers: [HealthController],
 })

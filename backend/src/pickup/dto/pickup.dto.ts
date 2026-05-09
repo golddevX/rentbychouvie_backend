@@ -13,12 +13,17 @@ export class PickupScanDto {
 export class ConfirmPickupDto {
   @ApiProperty({
     type: [String],
-    example: ['QR-DRS-RED-M-0001', 'QR-BAG-0007'],
-    description: 'All expected QR codes for the booking. Confirmation fails if any expected item is missing.',
+    example: [
+      'https://cdn.example.com/handover/front.jpg',
+      'https://cdn.example.com/handover/back.jpg',
+      'https://cdn.example.com/handover/accessories.jpg',
+      'https://cdn.example.com/handover/overview.jpg',
+    ],
+    description: 'Exactly 4 handover evidence images are required before the rental can be handed over.',
   })
   @IsArray()
-  @ArrayMinSize(1)
-  qrCodes!: string[];
+  @ArrayMinSize(4)
+  images!: string[];
 
   @ApiProperty({ example: 'All items clean and handed to customer.', required: false })
   @IsOptional()

@@ -84,17 +84,23 @@ export class RentalsService {
     // Create payment for rental
     const totalPrice = booking.totalPrice;
 
+    const inventoryItemIds = booking.items
+      .map((item) => item.inventoryItem?.id)
+      .filter((id): id is string => Boolean(id));
+
     const rental = await this.prisma.rental.create({
       data: {
         bookingId,
         status: RentalStatus.PENDING_PAYMENT,
         scheduledPickupDate: booking.startDate,
         scheduledReturnDate: booking.endDate,
-        inventoryItems: {
-          connect: booking.items.map((item) => ({
-            id: item.inventoryItem.id,
-          })),
-        },
+        ...(inventoryItemIds.length
+          ? {
+              inventoryItems: {
+                connect: inventoryItemIds.map((id) => ({ id })),
+              },
+            }
+          : {}),
       },
       include: {
         booking: true,

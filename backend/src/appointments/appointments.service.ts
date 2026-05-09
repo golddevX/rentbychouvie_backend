@@ -1,6 +1,7 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { AppointmentStatus, AppointmentType, Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { buildPaginatedResult, resolvePagination } from '../shared/pagination';
 
 const APPOINTMENT_LIFECYCLE = [
   'pending',
@@ -128,26 +129,66 @@ export class AppointmentsService {
     staffId?: string;
     lifecycleStatus?: string;
     includeArchived?: boolean;
+    page?: number;
+    limit?: number;
+    search?: string;
+    sortBy?: string;
+    sortOrder?: 'asc' | 'desc';
+    dateFrom?: string;
+    dateTo?: string;
   }) {
+    const { page, limit, skip, take } = resolvePagination(filters);
+    const sortBy = ['startTime', 'scheduledAt', 'createdAt'].includes(String(filters?.sortBy))
+      ? String(filters?.sortBy)
+      : 'startTime';
+    const sortOrder = filters?.sortOrder === 'desc' ? 'desc' : 'asc';
+    const normalizedSearch = String(filters?.search ?? '').trim();
+    const dateFrom = filters?.dateFrom ? new Date(filters.dateFrom) : undefined;
+    const dateTo = filters?.dateTo ? new Date(filters.dateTo) : undefined;
     const where: Prisma.AppointmentWhereInput = {
       archivedAt: filters?.includeArchived ? undefined : null,
       status: filters?.status,
       type: filters?.type,
       staffId: filters?.staffId,
       lifecycleStatus: filters?.lifecycleStatus,
+      ...(normalizedSearch
+        ? {
+            OR: [
+              { notes: { contains: normalizedSearch, mode: 'insensitive' } },
+              { room: { contains: normalizedSearch, mode: 'insensitive' } },
+              { customer: { is: { name: { contains: normalizedSearch, mode: 'insensitive' } } } },
+              { customer: { is: { email: { contains: normalizedSearch, mode: 'insensitive' } } } },
+              { customer: { is: { phone: { contains: normalizedSearch, mode: 'insensitive' } } } },
+              { staff: { is: { fullName: { contains: normalizedSearch, mode: 'insensitive' } } } },
+            ],
+          }
+        : {}),
+      ...(dateFrom || dateTo
+        ? {
+            startTime: {
+              ...(dateFrom ? { gte: dateFrom } : {}),
+              ...(dateTo ? { lte: dateTo } : {}),
+            },
+          }
+        : {}),
     };
 
-    const rows = await this.prisma.appointment.findMany({
-      where,
-      include: {
-        customer: true,
-        staff: { select: { id: true, fullName: true, email: true, role: true } },
-        resourceItem: { select: { id: true, serialNumber: true, qrCode: true, status: true } },
-      },
-      orderBy: { startTime: 'asc' },
-    });
+    const [total, rows] = await Promise.all([
+      this.prisma.appointment.count({ where }),
+      this.prisma.appointment.findMany({
+        where,
+        include: {
+          customer: true,
+          staff: { select: { id: true, fullName: true, email: true, role: true } },
+          resourceItem: { select: { id: true, serialNumber: true, qrCode: true, status: true } },
+        },
+        orderBy: { [sortBy]: sortOrder },
+        skip,
+        take,
+      }),
+    ]);
 
-    return rows.map((row) => {
+    const data = rows.map((row) => {
       const start = row.startTime ?? row.scheduledAt;
       const end = row.endTime ?? new Date(start.getTime() + row.durationMinutes * 60000);
       return {
@@ -157,6 +198,7 @@ export class AppointmentsService {
         durationHours: row.durationHours ?? Number((row.durationMinutes / 60).toFixed(2)),
       };
     });
+    return buildPaginatedResult(data, { page, limit, total });
   }
 
   async findById(id: string) {

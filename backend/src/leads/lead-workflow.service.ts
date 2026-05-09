@@ -1,4 +1,4 @@
-import {
+﻿import {
   BadRequestException,
   Injectable,
   NotFoundException,
@@ -8,31 +8,27 @@ import {
   AppointmentType,
   AuditAction,
   BookingStatus,
-  InventoryItemStatus,
   LeadAppointmentIntent,
   LeadDepositStatus,
+  LeadDepositType,
   LeadStatus,
+  InventoryItemStatus,
   PaymentMethod,
   PaymentStatus,
   PaymentType,
   Prisma,
   ProductHoldStatus,
+  ProductStatus,
 } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { RentalPricingService } from '../pricing/rental-pricing.service';
 import { AuditDisputesService } from '../audit-disputes/audit-disputes.service';
+import { PaymentsService } from '../payments/payments.service';
 
 const ONE_DAY_MS = 1000 * 60 * 60 * 24;
 const FIVE_HOURS_MS = 5 * 60 * 60 * 1000;
 
 type PrismaClientLike = PrismaService | Prisma.TransactionClient;
-
-const ACTIVE_RESERVED_LEAD_STATUSES: LeadStatus[] = [
-  LeadStatus.DEPOSIT_RECEIVED,
-  LeadStatus.APPOINTMENT_CREATED,
-  LeadStatus.APPOINTMENT_COMPLETED,
-  LeadStatus.BOOKING_CREATED,
-];
 
 const MANUAL_LEAD_STATUSES: LeadStatus[] = [
   LeadStatus.CONTACTED,
@@ -46,6 +42,7 @@ export class LeadWorkflowService {
     private readonly prisma: PrismaService,
     private readonly pricingService: RentalPricingService,
     private readonly auditDisputesService: AuditDisputesService,
+    private readonly paymentsService: PaymentsService,
   ) {}
 
   private leadInclude() {
@@ -55,6 +52,18 @@ export class LeadWorkflowService {
         select: { id: true, fullName: true, email: true, role: true },
       },
       product: true,
+      items: {
+        include: {
+          product: true,
+          inventoryItem: {
+            include: {
+              product: true,
+              variant: true,
+            },
+          },
+        },
+        orderBy: { createdAt: 'asc' as const },
+      },
       variant: true,
       inventoryItem: {
         include: {
@@ -148,9 +157,55 @@ export class LeadWorkflowService {
     return booking;
   }
 
+  private activeLeadItems(lead: Awaited<ReturnType<LeadWorkflowService['getLeadOrThrow']>>) {
+    const items = (lead.items ?? []).filter((item) => item.status !== 'REMOVED');
+    if (items.length > 0) return items;
+    if (!lead.productId || !lead.product) return [];
+    return [{
+      id: `legacy-${lead.id}-${lead.productId}`,
+      leadId: lead.id,
+      productId: lead.productId,
+      inventoryItemId: null,
+      inventoryItem: null,
+      product: lead.product,
+      productValueAtTime: Number((lead.product as any).productValue ?? lead.product.price ?? 0),
+      rentalPriceAtTime: Number((lead.product as any).rentalPrice ?? lead.product.price ?? 0),
+      status: 'REQUESTED',
+      createdAt: lead.createdAt ?? new Date(),
+      updatedAt: lead.updatedAt ?? new Date(),
+    }];
+  }
+
+  private reservedLeadItems(lead: Awaited<ReturnType<LeadWorkflowService['getLeadOrThrow']>>) {
+    return this.activeLeadItems(lead).filter((item) => item.status === 'RESERVED');
+  }
+
+  private async syncLeadPrimaryProduct(
+    leadId: string,
+    client: PrismaClientLike = this.prisma,
+  ) {
+    const firstActiveItem = await client.leadItem.findFirst({
+      where: {
+        leadId,
+        status: { not: 'REMOVED' as any },
+      },
+      orderBy: { createdAt: 'asc' },
+      select: { productId: true },
+    });
+
+    await client.lead.update({
+      where: { id: leadId },
+      data: {
+        productId: firstActiveItem?.productId ?? null,
+        inventoryItemId: null,
+      },
+    });
+  }
+
   private ensureProductSelectionReady(lead: Awaited<ReturnType<LeadWorkflowService['getLeadOrThrow']>>) {
-    if (!lead.productId) {
-      throw new BadRequestException('Lead does not have a selected product');
+    const items = this.activeLeadItems(lead);
+    if (items.length === 0) {
+      throw new BadRequestException('Lead does not have any selected products');
     }
     if (!lead.pickupDate || !lead.returnDate) {
       throw new BadRequestException('Lead must include pickup and return dates');
@@ -176,6 +231,39 @@ export class LeadWorkflowService {
     if (lead.status !== LeadStatus.APPOINTMENT_COMPLETED) {
       throw new BadRequestException('Booking can only be created after appointment is completed');
     }
+    if (this.reservedLeadItems(lead).length === 0) {
+      throw new BadRequestException('Lead must reserve at least one selected product before booking conversion');
+    }
+  }
+
+  private clearWorkflowBlock() {
+    return {
+      workflowBlockCode: null,
+      workflowBlockMessage: null,
+    };
+  }
+
+  private statusAfterDepositReversal(lead: Awaited<ReturnType<LeadWorkflowService['getLeadOrThrow']>>) {
+    if (lead.status === LeadStatus.CONTACTED || lead.contactedAt) return LeadStatus.CONTACTED;
+    if (this.activeLeadItems(lead).length > 0 && lead.pickupDate && lead.returnDate) return LeadStatus.PRODUCT_SELECTED;
+    return LeadStatus.NEW;
+  }
+
+  private async latestCompletedLeadDepositPayment(
+    leadId: string,
+    client: PrismaClientLike = this.prisma,
+  ) {
+    return client.payment.findFirst({
+      where: {
+        leadId,
+        archivedAt: null,
+        type: {
+          in: [PaymentType.SECURITY_DEPOSIT, PaymentType.BOOKING_DEPOSIT],
+        },
+        status: PaymentStatus.COMPLETED,
+      },
+      orderBy: { createdAt: 'desc' },
+    });
   }
 
   private mapIntentToAppointmentType(intent?: LeadAppointmentIntent | null) {
@@ -195,88 +283,56 @@ export class LeadWorkflowService {
     return { start, end };
   }
 
-  private async findOverlappingLockedItemIds(
-    inventoryItemIds: string[],
-    startDate: Date,
-    endDate: Date,
-    client: PrismaClientLike = this.prisma,
-    excludeBookingId?: string,
-  ) {
-    if (inventoryItemIds.length === 0) return new Set<string>();
-
-    const conflicts = await client.bookingItem.findMany({
-      where: {
-        inventoryItemId: { in: inventoryItemIds },
-        bookingId: excludeBookingId ? { not: excludeBookingId } : undefined,
-        booking: {
-          archivedAt: null,
-          status: {
-            in: [
-              BookingStatus.DEPOSIT_RECEIVED,
-              BookingStatus.CONFIRMED,
-              BookingStatus.SCHEDULED_PICKUP,
-              BookingStatus.PICKED_UP,
-              BookingStatus.RETURN_PENDING,
-            ],
-          },
-          startDate: { lt: endDate },
-          endDate: { gt: startDate },
-        },
-      },
-      select: { inventoryItemId: true },
-    });
-
-    return new Set(conflicts.map((item) => item.inventoryItemId));
+  private productValueForLead(lead: Awaited<ReturnType<LeadWorkflowService['getLeadOrThrow']>>) {
+    const total = this.activeLeadItems(lead).reduce((sum, item) => (
+      sum
+      + Math.max(
+        Number(item.productValueAtTime || 0),
+        Number((item.product as any)?.productValue ?? 0),
+        Number(item.product?.price ?? 0),
+        0,
+      )
+    ), 0);
+    if (total > 0) {
+      return total;
+    }
+    return Math.max(Number(lead.quotedPrice ?? 0), 0);
   }
 
-  private async findReservedLeadConflicts(
-    inventoryItemIds: string[],
-    startDate: Date,
-    endDate: Date,
-    leadId: string,
-    client: PrismaClientLike = this.prisma,
-  ) {
-    if (inventoryItemIds.length === 0) return new Set<string>();
-
-    const reservedLeads = await client.lead.findMany({
-      where: {
-        id: { not: leadId },
-        archivedAt: null,
-        inventoryItemId: { in: inventoryItemIds },
-        status: { in: ACTIVE_RESERVED_LEAD_STATUSES },
-        productHoldStatus: ProductHoldStatus.RESERVED,
-        bookingId: null,
-        pickupDate: { lt: endDate },
-        returnDate: { gt: startDate },
-      },
-      select: { inventoryItemId: true },
-    });
-
-    return new Set(
-      reservedLeads
-        .map((item) => item.inventoryItemId)
-        .filter((value): value is string => Boolean(value)),
-    );
+  private rentalPriceForLead(lead: Awaited<ReturnType<LeadWorkflowService['getLeadOrThrow']>>) {
+    return this.activeLeadItems(lead).reduce((sum, item) => (
+      sum
+      + Math.max(
+        Number(item.rentalPriceAtTime || 0),
+        Number((item.product as any)?.rentalPrice ?? 0),
+        Number(item.product?.price ?? 0),
+        0,
+      )
+    ), 0);
   }
 
-  private async releaseReservedInventoryIfNeeded(
+  private async releaseReservedProductIfNeeded(
     lead: Awaited<ReturnType<LeadWorkflowService['getLeadOrThrow']>>,
     client: PrismaClientLike = this.prisma,
   ) {
-    if (
-      !lead.inventoryItemId ||
-      lead.productHoldStatus !== ProductHoldStatus.RESERVED ||
-      lead.bookingId
-    ) {
+    const reservedItems = this.reservedLeadItems(lead);
+    if (lead.bookingId || reservedItems.length === 0) {
       return;
     }
-
-    await client.inventoryItem.updateMany({
+    await client.product.updateMany({
       where: {
-        id: lead.inventoryItemId,
-        status: InventoryItemStatus.RESERVED,
+        id: {
+          in: [...new Set(reservedItems.map((item) => item.productId))],
+        },
       },
-      data: { status: InventoryItemStatus.AVAILABLE },
+      data: { status: ProductStatus.AVAILABLE },
+    });
+    await client.leadItem.updateMany({
+      where: {
+        leadId: lead.id,
+        status: 'RESERVED' as any,
+      },
+      data: { status: 'REQUESTED' as any },
     });
   }
 
@@ -286,122 +342,34 @@ export class LeadWorkflowService {
     const pickupDate = new Date(lead.pickupDate!);
     const returnDate = new Date(lead.returnDate!);
     const rentalDays = this.durationFromDates(pickupDate, returnDate);
-    const durationDays = Math.min(3, Math.max(1, rentalDays));
-    const basePrice = Number(lead.product?.price ?? 0);
-    const rentalPrice = this.pricingService.calculateRentalPriceForDuration(basePrice, durationDays);
-    const earlyFee = this.pricingService.calculateEarlyPickupFee(durationDays, rentalDays);
-    const totalPrice = rentalPrice + earlyFee;
-    const deposit = this.pricingService.calculateDeposit(totalPrice, basePrice);
+    const items = this.activeLeadItems(lead);
+    const productValue = this.productValueForLead(lead);
+    const rentalPrice = items.reduce((sum, item) => {
+      const unitPrice = Math.max(
+        Number(item.rentalPriceAtTime || 0),
+        Number((item.product as any)?.rentalPrice ?? 0),
+        Number(item.product?.price ?? 0),
+        0,
+      );
+      return sum + this.pricingService.calculateRentalTotal({
+        dailyRentalPrice: unitPrice,
+        rentalDays,
+      }).rentalTotal;
+    }, 0);
+    const totalPrice = rentalPrice;
+    const deposit = this.pricingService.calculateDeposit(totalPrice, productValue);
 
     return {
       pickupDate,
       returnDate,
       rentalDays,
-      durationDays,
-      basePrice,
+      durationDays: rentalDays,
+      basePrice: rentalPrice,
+      productValue,
       rentalPrice,
       totalPrice,
       deposit,
     };
-  }
-
-  private async resolveInventoryItemForLead(
-    lead: Awaited<ReturnType<LeadWorkflowService['getLeadOrThrow']>>,
-    client: PrismaClientLike = this.prisma,
-  ) {
-    this.ensureProductSelectionReady(lead);
-
-    const pickupDate = new Date(lead.pickupDate!);
-    const returnDate = new Date(lead.returnDate!);
-
-    if (lead.inventoryItemId) {
-      const item = await client.inventoryItem.findFirst({
-        where: {
-          id: lead.inventoryItemId,
-          archivedAt: null,
-        },
-        include: {
-          product: true,
-          variant: true,
-        },
-      });
-
-      if (!item) {
-        throw new BadRequestException('Selected inventory item was not found');
-      }
-      if (
-        item.status === InventoryItemStatus.DAMAGED ||
-        item.status === InventoryItemStatus.RETIRED ||
-        item.status === InventoryItemStatus.MAINTENANCE
-      ) {
-        throw new BadRequestException('Selected inventory item is unavailable');
-      }
-      if (item.productId !== lead.productId) {
-        throw new BadRequestException('Inventory item does not belong to selected product');
-      }
-      if (lead.variantId && item.variantId !== lead.variantId) {
-        throw new BadRequestException('Inventory item does not belong to selected variant');
-      }
-
-      const bookingConflicts = await this.findOverlappingLockedItemIds([item.id], pickupDate, returnDate, client);
-      if (bookingConflicts.size > 0) {
-        throw new BadRequestException('Selected inventory item is already locked for the requested schedule');
-      }
-
-      const leadConflicts = await this.findReservedLeadConflicts([item.id], pickupDate, returnDate, lead.id, client);
-      if (leadConflicts.size > 0) {
-        throw new BadRequestException('Selected inventory item is reserved by another lead');
-      }
-
-      return item;
-    }
-
-    const candidates = await client.inventoryItem.findMany({
-      where: {
-        productId: lead.productId!,
-        variantId: lead.variantId ?? undefined,
-        archivedAt: null,
-        status: InventoryItemStatus.AVAILABLE,
-        ...(lead.requestedSize || lead.requestedColor
-          ? {
-              variant: {
-                size: lead.requestedSize ?? undefined,
-                color: lead.requestedColor ?? undefined,
-              },
-            }
-          : {}),
-      },
-      include: {
-        product: true,
-        variant: true,
-      },
-      orderBy: { createdAt: 'asc' },
-    });
-
-    if (candidates.length === 0) {
-      throw new BadRequestException('No available inventory item matches the selected lead product');
-    }
-
-    const bookingConflicts = await this.findOverlappingLockedItemIds(
-      candidates.map((item) => item.id),
-      pickupDate,
-      returnDate,
-      client,
-    );
-    const leadConflicts = await this.findReservedLeadConflicts(
-      candidates.map((item) => item.id),
-      pickupDate,
-      returnDate,
-      lead.id,
-      client,
-    );
-
-    const available = candidates.find((item) => !bookingConflicts.has(item.id) && !leadConflicts.has(item.id));
-    if (!available) {
-      throw new BadRequestException('No inventory item is available for the selected lead schedule');
-    }
-
-    return available;
   }
 
   private async createAppointmentRecord(
@@ -435,7 +403,6 @@ export class LeadWorkflowService {
         durationHours: 1,
         lifecycleStatus: 'pending',
         notes: lead.notes,
-        resourceItemId: lead.inventoryItemId ?? undefined,
         staffId: lead.assignedToId ?? undefined,
         leadId: lead.id,
       },
@@ -446,6 +413,7 @@ export class LeadWorkflowService {
       data: {
         appointmentId: appointment.id,
         status: LeadStatus.APPOINTMENT_CREATED,
+        ...this.clearWorkflowBlock(),
       },
     });
 
@@ -469,6 +437,43 @@ export class LeadWorkflowService {
     return appointment;
   }
 
+  async expireDeposit(leadId: string, actorId?: string) {
+    return this.prisma.$transaction(async (tx) => {
+      const before = await this.getLeadOrThrow(leadId, tx);
+      if (before.status !== LeadStatus.DEPOSIT_REQUESTED) {
+        return before;
+      }
+
+      await this.releaseReservedProductIfNeeded(before, tx);
+
+      const after = await tx.lead.update({
+        where: { id: leadId },
+        data: {
+          status: LeadStatus.DEPOSIT_EXPIRED,
+          depositStatus: LeadDepositStatus.EXPIRED,
+          productHoldStatus: ProductHoldStatus.RELEASED,
+          lostReason: before.lostReason ?? 'Deposit not received within 5 hours',
+          workflowBlockCode: 'deposit_expired',
+          workflowBlockMessage: 'Deposit request expired before payment was received.',
+        },
+        include: this.leadInclude(),
+      });
+
+      await this.auditDisputesService.log({
+        action: AuditAction.STATUS_CHANGE,
+        entity: 'LeadWorkflow',
+        entityId: leadId,
+        actorId,
+        summary: 'Expired lead deposit request',
+        before,
+        after,
+        metadata: { step: 'expire_deposit' },
+      }, tx);
+
+      return after;
+    });
+  }
+
   async expirePendingDeposits(actorId?: string) {
     const now = new Date();
     const expiredLeads = await this.prisma.lead.findMany({
@@ -481,33 +486,7 @@ export class LeadWorkflowService {
     });
 
     for (const lead of expiredLeads) {
-      await this.prisma.$transaction(async (tx) => {
-        const before = await tx.lead.findFirst({
-          where: { id: lead.id },
-          include: this.leadInclude(),
-        });
-        const after = await tx.lead.update({
-          where: { id: lead.id },
-          data: {
-            status: LeadStatus.DEPOSIT_EXPIRED,
-            depositStatus: LeadDepositStatus.EXPIRED,
-            productHoldStatus: ProductHoldStatus.RELEASED,
-            lostReason: before?.lostReason ?? 'Deposit not received within 5 hours',
-          },
-          include: this.leadInclude(),
-        });
-
-        await this.auditDisputesService.log({
-          action: AuditAction.STATUS_CHANGE,
-          entity: 'LeadWorkflow',
-          entityId: lead.id,
-          actorId,
-          summary: 'Expired lead deposit request',
-          before,
-          after,
-          metadata: { step: 'expire_deposit' },
-        }, tx);
-      });
+      await this.expireDeposit(lead.id, actorId);
     }
 
     return expiredLeads.length;
@@ -557,7 +536,7 @@ export class LeadWorkflowService {
         throw new BadRequestException('Cannot manually change lead outcome after booking conversion');
       }
 
-      await this.releaseReservedInventoryIfNeeded(before, tx);
+      await this.releaseReservedProductIfNeeded(before, tx);
 
       const after = await tx.lead.update({
         where: { id: leadId },
@@ -587,9 +566,8 @@ export class LeadWorkflowService {
   async selectProductForLead(
     leadId: string,
     input: {
-      productId: string;
-      variantId?: string;
-      inventoryItemId?: string;
+      productId?: string;
+      productIds?: string[];
       pickupDate: string;
       returnDate: string;
       appointmentIntent: LeadAppointmentIntent;
@@ -609,6 +587,17 @@ export class LeadWorkflowService {
     if (returnDate.getTime() <= pickupDate.getTime()) {
       throw new BadRequestException('Return date must be after pickup date');
     }
+    const requestedProductIds = Array.from(
+      new Set(
+        [
+          ...(Array.isArray(input.productIds) ? input.productIds : []),
+          ...(input.productId ? [input.productId] : []),
+        ].filter(Boolean),
+      ),
+    );
+    if (!requestedProductIds.length) {
+      throw new BadRequestException('At least one product is required');
+    }
 
     return this.prisma.$transaction(async (tx) => {
       const before = await this.getLeadOrThrow(leadId, tx);
@@ -620,43 +609,16 @@ export class LeadWorkflowService {
       ) {
         throw new BadRequestException('Cannot change selected product after deposit has been received');
       }
-      const product = await tx.product.findFirst({
-        where: { id: input.productId, archivedAt: null, isActive: true },
-      });
-      if (!product) {
-        throw new BadRequestException('Product not found');
-      }
-
-      let variantData: { id: string; size: string | null; color: string | null } | null = null;
-      if (input.variantId) {
-        const variant = await tx.productVariant.findFirst({
-          where: {
-            id: input.variantId,
-            productId: input.productId,
-            archivedAt: null,
-            isActive: true,
-          },
-          select: { id: true, size: true, color: true },
-        });
-        if (!variant) {
-          throw new BadRequestException('Variant not found');
-        }
-        variantData = variant;
-      }
-
-      if (input.inventoryItemId) {
-        const inventoryItem = await tx.inventoryItem.findFirst({
-          where: {
-            id: input.inventoryItemId,
-            productId: input.productId,
-            variantId: input.variantId ?? undefined,
-            archivedAt: null,
-          },
-          select: { id: true },
-        });
-        if (!inventoryItem) {
-          throw new BadRequestException('Inventory item does not match selected product');
-        }
+      const selectedProducts = requestedProductIds.length > 0
+        ? await tx.product.findMany({
+            where: {
+              id: { in: requestedProductIds },
+              archivedAt: null,
+            },
+          })
+        : [];
+      if (selectedProducts.length !== requestedProductIds.length) {
+        throw new BadRequestException('One or more selected products were not found');
       }
 
       const after = await tx.lead.update({
@@ -664,17 +626,44 @@ export class LeadWorkflowService {
         data: {
           status: LeadStatus.PRODUCT_SELECTED,
           productHoldStatus: ProductHoldStatus.NONE,
-          productId: input.productId,
-          variantId: input.variantId,
-          inventoryItemId: input.inventoryItemId,
+          productId: selectedProducts[0]?.id ?? null,
+          variantId: null,
+          inventoryItemId: null,
           pickupDate,
           returnDate,
           rentalDates: this.serializeRentalDates(pickupDate, returnDate),
           appointmentIntent: input.appointmentIntent,
-          requestedSize: input.size ?? variantData?.size ?? undefined,
-          requestedColor: input.color ?? variantData?.color ?? undefined,
+          requestedSize: input.size ?? null,
+          requestedColor: input.color ?? null,
           notes: input.notes ?? before.notes,
-          quotedPrice: input.quotedPrice ?? before.quotedPrice,
+          quotedPrice:
+            input.quotedPrice
+            ?? selectedProducts.reduce(
+              (sum, product) => sum + Math.max(
+                Number((product as any)?.rentalPrice ?? product.price ?? 0),
+                0,
+              ),
+              0,
+            ),
+          items: {
+            deleteMany: {},
+            create: selectedProducts.map((product) => ({
+              productId: product.id,
+              inventoryItemId: null,
+              productNameAtTime: product.name ?? null,
+              productValueAtTime: Math.max(
+                Number((product as any)?.productValue ?? 0),
+                Number(product.price ?? 0),
+                0,
+              ),
+              rentalPriceAtTime: Math.max(
+                Number((product as any)?.rentalPrice ?? 0),
+                Number(product.price ?? 0),
+                0,
+              ),
+              status: 'REQUESTED' as const,
+            })),
+          },
         },
         include: this.leadInclude(),
       });
@@ -689,9 +678,7 @@ export class LeadWorkflowService {
         after,
         metadata: {
           step: 'select_product',
-          productId: input.productId,
-          variantId: input.variantId,
-          inventoryItemId: input.inventoryItemId,
+          productIds: requestedProductIds,
         },
       }, tx);
 
@@ -705,6 +692,9 @@ export class LeadWorkflowService {
       quotedPrice?: number;
       depositDeadlineAt?: string;
       depositAmount?: number;
+      depositRate?: number;
+      depositType?: 'percent' | 'custom_amount';
+      customDepositAmount?: number;
     },
     actorId?: string,
   ) {
@@ -717,10 +707,18 @@ export class LeadWorkflowService {
 
       const pricing = this.calculateLeadPricing(before);
       const quotedPrice = input?.quotedPrice ?? before.quotedPrice ?? pricing.totalPrice;
-      const depositAmountRequired = Math.max(
-        Number(input?.depositAmount ?? before.depositAmountRequired ?? 0),
-        Math.ceil(Number(quotedPrice || pricing.totalPrice) * 0.5),
-      );
+      const depositPolicy = this.pricingService.getDepositPolicy();
+      const productValue = Math.max(Number(pricing.productValue || 0), 0);
+      const requestedDeposit = this.pricingService.calculateRequestedDeposit({
+        productValue,
+        depositType:
+          input?.depositType
+          ?? ((before as any).selectedDepositType === LeadDepositType.CUSTOM_AMOUNT ? 'custom_amount' : 'percent'),
+        depositRate: input?.depositRate ?? (before as any).selectedDepositRate,
+        customAmount: input?.customDepositAmount ?? (before as any).customDepositAmount,
+        policy: depositPolicy,
+      });
+      const depositAmountRequired = requestedDeposit.requiredAmount;
       const deadline = input?.depositDeadlineAt
         ? new Date(input.depositDeadlineAt)
         : new Date(Date.now() + FIVE_HOURS_MS);
@@ -733,8 +731,15 @@ export class LeadWorkflowService {
           productHoldStatus: ProductHoldStatus.PENDING_DEPOSIT,
           quotedPrice,
           depositAmountRequired,
+          selectedDepositType:
+            requestedDeposit.depositType === 'custom_amount'
+              ? LeadDepositType.CUSTOM_AMOUNT
+              : LeadDepositType.PERCENT,
+          selectedDepositRate: requestedDeposit.selectedDepositRate,
+          customDepositAmount: requestedDeposit.customAmount,
           depositRequestedAt: new Date(),
           depositDeadlineAt: deadline,
+          ...this.clearWorkflowBlock(),
         },
         include: this.leadInclude(),
       });
@@ -751,6 +756,9 @@ export class LeadWorkflowService {
           step: 'request_deposit',
           depositDeadlineAt: deadline.toISOString(),
           depositAmountRequired,
+          selectedDepositRate: requestedDeposit.selectedDepositRate,
+          selectedDepositType: requestedDeposit.depositType,
+          customDepositAmount: requestedDeposit.customAmount,
         },
       }, tx);
 
@@ -764,40 +772,78 @@ export class LeadWorkflowService {
       amount: number;
       paymentMethod?: PaymentMethod;
       description?: string;
+      depositRate?: number;
+      depositType?: 'percent' | 'custom_amount';
+      customDepositAmount?: number;
     },
     actorId?: string,
   ) {
     await this.expirePendingDeposits(actorId);
-    if (Number(input.amount) <= 0) {
-      throw new BadRequestException('Deposit amount must be greater than 0');
-    }
 
     return this.prisma.$transaction(async (tx) => {
       const before = await this.getLeadOrThrow(leadId, tx);
       this.ensureProductSelectionReady(before);
-      this.ensureDepositWindowOpen(before);
-      if (
-        before.status !== LeadStatus.DEPOSIT_REQUESTED &&
-        before.status !== LeadStatus.PRODUCT_SELECTED &&
-        before.status !== LeadStatus.CONTACTED
-      ) {
+      if (before.bookingId || before.status === LeadStatus.BOOKING_CREATED) {
+        throw new BadRequestException('Lead has already been converted to booking');
+      }
+      if (before.status === LeadStatus.CANCELLED || before.status === LeadStatus.LOST) {
         throw new BadRequestException('Lead is not ready to receive deposit');
       }
+      const existingCompletedDeposit = await this.latestCompletedLeadDepositPayment(before.id, tx);
+      if (existingCompletedDeposit) {
+        const existingAppointment = before.appointmentId
+          ? await tx.appointment.findFirst({ where: { id: before.appointmentId, archivedAt: null } })
+          : null;
+        return {
+          ...(await this.getLeadOrThrow(before.id, tx)),
+          payment: existingCompletedDeposit,
+          appointment: existingAppointment,
+        };
+      }
 
-      const reservedItem = await this.resolveInventoryItemForLead(before, tx);
+      const pricing = this.calculateLeadPricing(before);
+      const depositPolicy = this.pricingService.getDepositPolicy();
+      const productValue = Math.max(Number(pricing.productValue || 0), 0);
+      const requestedDeposit = this.pricingService.calculateRequestedDeposit({
+        productValue,
+        depositType:
+          input.depositType
+          ?? ((before as any).selectedDepositType === LeadDepositType.CUSTOM_AMOUNT ? 'custom_amount' : 'percent'),
+        depositRate: input.depositRate ?? (before as any).selectedDepositRate,
+        customAmount: input.customDepositAmount ?? (before as any).customDepositAmount,
+        policy: depositPolicy,
+      });
+      const requiredDepositAmount = requestedDeposit.requiredAmount;
+      if (Number(input.amount) < 0) {
+        throw new BadRequestException('Deposit amount must be zero or greater');
+      }
+      if (Number(input.amount) < requiredDepositAmount) {
+        throw new BadRequestException('Security deposit does not satisfy the requested deposit amount');
+      }
+      const requestedItems = this.activeLeadItems(before);
+
       const payment = await tx.payment.create({
         data: {
           leadId: before.id,
-          type: PaymentType.BOOKING_DEPOSIT,
+          type: PaymentType.SECURITY_DEPOSIT,
           amount: Number(input.amount),
           amountPaid: Number(input.amount),
           rentalAmount: 0,
-          depositAmount: Number(input.amount),
+          securityDepositAmount: Number(input.amount),
           paymentMethod: input.paymentMethod ?? PaymentMethod.CASH,
           status: PaymentStatus.COMPLETED,
           paidAt: new Date(),
-          description: input.description ?? `Lead deposit received for ${before.customer.name}`,
+          description: input.description ?? `Lead security deposit received for ${before.customer.name}`,
           processedById: await this.resolveActorId(actorId, tx),
+          metadata: {
+            sourceStage: 'lead',
+            depositType: requestedDeposit.depositType,
+            depositRate: requestedDeposit.selectedDepositRate,
+            customDepositAmount: requestedDeposit.customAmount,
+            productValueAtTime: productValue,
+            rentalTotalAtTime: Number(pricing.totalPrice || before.quotedPrice || 0),
+            note: input.description ?? null,
+          },
         },
       });
 
@@ -807,19 +853,35 @@ export class LeadWorkflowService {
           status: LeadStatus.DEPOSIT_RECEIVED,
           depositStatus: LeadDepositStatus.RECEIVED,
           productHoldStatus: ProductHoldStatus.RESERVED,
-          inventoryItemId: reservedItem.id,
           depositAmountPaid: { increment: Number(input.amount) },
-          depositAmountRequired: before.depositAmountRequired > 0
-            ? before.depositAmountRequired
-            : this.calculateLeadPricing(before).deposit.bookingDeposit,
+          depositAmountRequired: requiredDepositAmount,
+          selectedDepositType:
+            requestedDeposit.depositType === 'custom_amount'
+              ? LeadDepositType.CUSTOM_AMOUNT
+              : LeadDepositType.PERCENT,
+          selectedDepositRate: requestedDeposit.selectedDepositRate,
+          customDepositAmount: requestedDeposit.customAmount,
           depositReceivedAt: new Date(),
+          depositDeadlineAt: null,
+          ...this.clearWorkflowBlock(),
         },
         include: this.leadInclude(),
       });
 
-      await tx.inventoryItem.update({
-        where: { id: reservedItem.id },
-        data: { status: InventoryItemStatus.RESERVED },
+      await tx.product.updateMany({
+        where: {
+          id: {
+            in: [...new Set(requestedItems.map((item) => item.productId))],
+          },
+        },
+        data: { status: ProductStatus.RESERVED },
+      });
+      await tx.leadItem.updateMany({
+        where: {
+          leadId: before.id,
+          status: { not: 'REMOVED' as any },
+        },
+        data: { status: 'RESERVED' as any },
       });
 
       await this.auditDisputesService.log({
@@ -828,31 +890,68 @@ export class LeadWorkflowService {
         entityId: before.id,
         actorId,
         paymentId: payment.id,
-        inventoryItemId: reservedItem.id,
         summary: `Received lead deposit ${input.amount}`,
         before,
         after: {
           paymentId: payment.id,
           leadStatus: leadAfterDeposit.status,
-          inventoryItemId: reservedItem.id,
+          productIds: requestedItems.map((item) => item.productId),
         },
         metadata: {
           step: 'receive_deposit',
           amount: input.amount,
           paymentMethod: input.paymentMethod ?? PaymentMethod.CASH,
+          selectedDepositRate: requestedDeposit.selectedDepositRate,
+          selectedDepositType: requestedDeposit.depositType,
+          customDepositAmount: requestedDeposit.customAmount,
         },
       }, tx);
 
-      const appointment = await this.createAppointmentRecord(leadAfterDeposit, actorId, tx);
+      try {
+        const appointment = await this.createAppointmentRecord(leadAfterDeposit, actorId, tx);
+        return tx.lead.findFirst({
+          where: { id: before.id },
+          include: this.leadInclude(),
+        }).then((lead) => ({
+          ...lead,
+          payment,
+          appointment,
+        }));
+      } catch (error: any) {
+        const blockedLead = await tx.lead.update({
+          where: { id: before.id },
+          data: {
+            status: LeadStatus.DEPOSIT_RECEIVED,
+            depositStatus: LeadDepositStatus.RECEIVED,
+            productHoldStatus: ProductHoldStatus.RESERVED,
+            appointmentId: null,
+            workflowBlockCode: 'appointment_failed',
+            workflowBlockMessage: error?.message ?? 'Unable to auto-create appointment after receiving deposit.',
+          },
+          include: this.leadInclude(),
+        });
 
-      return tx.lead.findFirst({
-        where: { id: before.id },
-        include: this.leadInclude(),
-      }).then((lead) => ({
-        ...lead,
-        payment,
-        appointment,
-      }));
+        await this.auditDisputesService.log({
+          action: AuditAction.STATUS_CHANGE,
+          entity: 'LeadWorkflow',
+          entityId: before.id,
+          actorId,
+          paymentId: payment.id,
+          summary: `Lead deposit received but appointment creation failed for lead ${before.id}`,
+          before: leadAfterDeposit,
+          after: blockedLead,
+          metadata: {
+            step: 'receive_deposit_appointment_failed',
+            error: error?.message,
+          },
+        }, tx);
+
+        return {
+          ...blockedLead,
+          payment,
+          appointment: null,
+        };
+      }
     });
   }
 
@@ -866,8 +965,8 @@ export class LeadWorkflowService {
       if (lead.status !== LeadStatus.DEPOSIT_RECEIVED && lead.status !== LeadStatus.APPOINTMENT_CREATED) {
         throw new BadRequestException('Lead must have a received deposit before creating appointment');
       }
-      if (!lead.inventoryItemId) {
-        throw new BadRequestException('Lead must reserve an inventory item before appointment');
+      if (this.reservedLeadItems(lead).length === 0) {
+        throw new BadRequestException('Lead must reserve selected products before appointment');
       }
 
       const appointment = await this.createAppointmentRecord(lead, actorId, tx);
@@ -877,6 +976,10 @@ export class LeadWorkflowService {
         appointment,
       };
     });
+  }
+
+  async retryCreateAppointment(leadId: string, actorId?: string) {
+    return this.createAppointmentFromLead(leadId, actorId);
   }
 
   async createBookingFromLead(
@@ -902,10 +1005,35 @@ export class LeadWorkflowService {
       if (existingBooking) return existingBooking;
       }
 
-      this.ensureLeadReadyForBooking(lead);
-      if (!lead.inventoryItemId) {
-        throw new BadRequestException('Lead must reserve an inventory item before booking conversion');
+      const existingByLead = await tx.booking.findFirst({
+        where: {
+          leadId: lead.id,
+          archivedAt: null,
+        },
+        include: {
+          customer: true,
+          items: { include: { product: true, variant: true, inventoryItem: true } },
+          payments: true,
+          rental: { include: { payments: true } },
+        },
+      });
+      if (existingByLead) {
+        if (!lead.bookingId) {
+          await tx.lead.update({
+            where: { id: lead.id },
+            data: {
+              status: LeadStatus.BOOKING_CREATED,
+              bookingId: existingByLead.id,
+              convertedToBookingId: existingByLead.id,
+              productHoldStatus: ProductHoldStatus.CONVERTED_TO_BOOKING,
+              ...this.clearWorkflowBlock(),
+            },
+          });
+        }
+        return existingByLead;
       }
+
+      this.ensureLeadReadyForBooking(lead);
 
       const actor = await this.resolveActorId(actorId, tx);
       const createdById = actor ?? lead.assignedToId;
@@ -913,16 +1041,10 @@ export class LeadWorkflowService {
         throw new BadRequestException('A valid actor is required to create booking from lead');
       }
 
-      const reservedItem = await this.resolveInventoryItemForLead(lead, tx);
       const pricing = this.calculateLeadPricing(lead);
-      const conflictingBookings = await this.findOverlappingLockedItemIds(
-        [reservedItem.id],
-        pricing.pickupDate,
-        pricing.returnDate,
-        tx,
-      );
-      if (conflictingBookings.size > 0) {
-        throw new BadRequestException('Reserved inventory item conflicts with another booking');
+      const reservedItems = this.reservedLeadItems(lead);
+      if (reservedItems.length === 0) {
+        throw new BadRequestException('Lead does not have any reserved products ready for booking');
       }
 
       const booking = await tx.booking.create({
@@ -930,6 +1052,7 @@ export class LeadWorkflowService {
           leadId: lead.id,
           customerId: lead.customerId,
           status: BookingStatus.DEPOSIT_RECEIVED,
+          appointmentId: lead.appointmentId ?? undefined,
           startDate: pricing.pickupDate,
           endDate: pricing.returnDate,
           rentalDays: pricing.rentalDays,
@@ -939,20 +1062,50 @@ export class LeadWorkflowService {
           basePrice: pricing.basePrice,
           priceAdjustment: pricing.totalPrice - pricing.basePrice,
           totalPrice: pricing.totalPrice,
-          bookingDepositRequired: pricing.deposit.bookingDeposit,
+          productValue: Math.max(Number(pricing.productValue || 0), 0),
+          productValueTotal: Math.max(Number(pricing.productValue || 0), 0),
+          selectedDepositType:
+            (lead as any).selectedDepositType === LeadDepositType.CUSTOM_AMOUNT
+              ? LeadDepositType.CUSTOM_AMOUNT
+              : LeadDepositType.PERCENT,
+          selectedDepositRate: Number((lead as any).selectedDepositRate || 50),
+          customDepositAmount: Number((lead as any).customDepositAmount || 0) || null,
+          depositPolicySnapshot: this.pricingService.getDepositPolicy() as unknown as Prisma.InputJsonValue,
+          rentalPaymentPolicySnapshot: this.pricingService.getRentalPaymentPolicy() as unknown as Prisma.InputJsonValue,
+          bookingDepositRequired: Math.max(Number(lead.depositAmountRequired || 0), 0),
           bookingDepositPaid: Math.max(Number(lead.depositAmountPaid || 0), 0),
-          securityDepositRequired: pricing.deposit.securityDeposit,
-          securityDepositOption: pricing.deposit.securityDepositOption,
+          depositRequired: Math.max(Number(lead.depositAmountRequired || 0), 0),
+          depositPaid: Math.max(Number(lead.depositAmountPaid || 0), 0),
+          rentalPaid: 0,
+          securityDepositRequired: Math.max(Number(pricing.productValue || 0), 0),
+          securityDepositOption: 'cash',
           lockedAt: new Date(),
           notes: lead.notes,
           createdById,
           items: {
-            create: {
-              inventoryItemId: reservedItem.id,
-              productId: reservedItem.productId,
-              variantId: reservedItem.variantId,
-              pricePerDay: pricing.rentalPrice,
-            },
+            create: reservedItems.map((item) => ({
+              inventoryItemId: item.inventoryItemId ?? undefined,
+              productId: item.productId,
+              productNameAtTime: item.product?.name ?? null,
+              pricePerDay: Math.max(
+                Number(item.rentalPriceAtTime || 0),
+                Number((item.product as any)?.rentalPrice ?? 0),
+                Number(item.product?.price ?? 0),
+                0,
+              ),
+              productValueAtTime: Math.max(
+                Number(item.productValueAtTime || 0),
+                Number((item.product as any)?.productValue ?? 0),
+                Number(item.product?.price ?? 0),
+                0,
+              ),
+              rentalPriceAtTime: Math.max(
+                Number(item.rentalPriceAtTime || 0),
+                Number((item.product as any)?.rentalPrice ?? 0),
+                Number(item.product?.price ?? 0),
+                0,
+              ),
+            })),
           },
         },
         include: {
@@ -970,12 +1123,19 @@ export class LeadWorkflowService {
       const rental = await tx.rental.create({
         data: {
           bookingId: booking.id,
-          status: 'CONFIRMED',
+          status: 'PENDING_PAYMENT',
           scheduledPickupDate: pricing.pickupDate,
           scheduledReturnDate: pricing.returnDate,
-          inventoryItems: {
-            connect: [{ id: reservedItem.id }],
-          },
+          ...(reservedItems.some((item) => item.inventoryItemId)
+            ? {
+                inventoryItems: {
+                  connect: reservedItems
+                    .map((item) => item.inventoryItemId)
+                    .filter((id): id is string => Boolean(id))
+                    .map((id) => ({ id })),
+                },
+              }
+            : {}),
         },
       });
 
@@ -983,7 +1143,9 @@ export class LeadWorkflowService {
         where: {
           leadId: lead.id,
           bookingId: null,
-          type: PaymentType.BOOKING_DEPOSIT,
+          type: {
+            in: [PaymentType.SECURITY_DEPOSIT, PaymentType.BOOKING_DEPOSIT],
+          },
           status: PaymentStatus.COMPLETED,
           archivedAt: null,
         },
@@ -999,11 +1161,43 @@ export class LeadWorkflowService {
             description: `Lead deposit converted to booking ${booking.id}`,
           },
         });
+
+        await tx.booking.update({
+          where: { id: booking.id },
+          data: {
+            bookingDepositPaymentId: leadDepositPayment.id,
+          },
+        });
       }
 
-      await tx.inventoryItem.update({
-        where: { id: reservedItem.id },
+      await tx.inventoryItem.updateMany({
+        where: {
+          id: {
+            in: reservedItems
+              .map((item) => item.inventoryItemId)
+              .filter((id): id is string => Boolean(id)),
+          },
+        },
         data: { status: InventoryItemStatus.RESERVED },
+      });
+      await tx.product.updateMany({
+        where: {
+          id: {
+            in: [...new Set(reservedItems.map((item) => item.productId))],
+          },
+        },
+        data: { status: ProductStatus.RESERVED },
+      });
+      await tx.leadItem.updateMany({
+        where: {
+          leadId: lead.id,
+          inventoryItemId: {
+            in: reservedItems
+              .map((item) => item.inventoryItemId)
+              .filter((id): id is string => Boolean(id)),
+          },
+        },
+        data: { status: 'RESERVED' as any },
       });
 
       const afterLead = await tx.lead.update({
@@ -1013,6 +1207,7 @@ export class LeadWorkflowService {
           bookingId: booking.id,
           convertedToBookingId: booking.id,
           productHoldStatus: ProductHoldStatus.CONVERTED_TO_BOOKING,
+          ...this.clearWorkflowBlock(),
         },
         include: this.leadInclude(),
       });
@@ -1031,7 +1226,6 @@ export class LeadWorkflowService {
         actorId,
         bookingId: booking.id,
         rentalId: rental.id,
-        inventoryItemId: reservedItem.id,
         summary: `Auto-created booking ${booking.id} from lead`,
         before: lead,
         after: afterLead,
@@ -1042,6 +1236,8 @@ export class LeadWorkflowService {
           pricing,
         },
       }, tx);
+
+      await this.paymentsService.syncBookingDerivedState(booking.id, tx);
 
       return tx.booking.findFirst({
         where: { id: booking.id },
@@ -1078,13 +1274,16 @@ export class LeadWorkflowService {
       if (booking.customerId !== lead.customerId) {
         throw new BadRequestException('Booking customer does not match lead customer');
       }
-      if (lead.inventoryItemId && !booking.items.some((item) => item.inventoryItemId === lead.inventoryItemId)) {
-        throw new BadRequestException('Booking does not include the reserved inventory item from lead');
+      if (this.activeLeadItems(lead).length === 0) {
+        throw new BadRequestException('Lead does not include selected products');
       }
 
       await tx.booking.update({
         where: { id: booking.id },
-        data: { leadId: lead.id },
+        data: {
+          leadId: lead.id,
+          appointmentId: lead.appointmentId ?? booking.appointmentId ?? undefined,
+        },
       });
 
       const after = await tx.lead.update({
@@ -1094,6 +1293,7 @@ export class LeadWorkflowService {
           bookingId: booking.id,
           convertedToBookingId: booking.id,
           productHoldStatus: ProductHoldStatus.CONVERTED_TO_BOOKING,
+          ...this.clearWorkflowBlock(),
         },
         include: this.leadInclude(),
       });
@@ -1157,6 +1357,7 @@ export class LeadWorkflowService {
         data: {
           status: LeadStatus.APPOINTMENT_COMPLETED,
           appointmentId: appointment.id,
+          ...this.clearWorkflowBlock(),
         },
         include: this.leadInclude(),
       });
@@ -1185,7 +1386,33 @@ export class LeadWorkflowService {
         select: { leadId: true },
       });
       if (appointment?.leadId) {
-        await this.createBookingFromLead(appointment.leadId, actorId);
+        try {
+          await this.createBookingFromLead(appointment.leadId, actorId);
+        } catch (error: any) {
+          await this.prisma.lead.update({
+            where: { id: appointment.leadId },
+            data: {
+              workflowBlockCode: 'booking_failed',
+              workflowBlockMessage: error?.message ?? 'Unable to auto-create booking after appointment completion.',
+            },
+          });
+          await this.auditDisputesService.log({
+            action: AuditAction.STATUS_CHANGE,
+            entity: 'LeadWorkflow',
+            entityId: appointment.leadId,
+            actorId,
+            summary: `Appointment completed but booking creation failed for lead ${appointment.leadId}`,
+            after: {
+              workflowBlockCode: 'booking_failed',
+              workflowBlockMessage: error?.message ?? 'Unable to auto-create booking after appointment completion.',
+            },
+            metadata: {
+              step: 'complete_appointment_booking_failed',
+              appointmentId,
+              error: error?.message,
+            },
+          });
+        }
       }
       return this.prisma.appointment.findFirst({
         where: { id: appointmentId },
@@ -1223,6 +1450,11 @@ export class LeadWorkflowService {
             status: LeadStatus.DEPOSIT_RECEIVED,
             productHoldStatus: ProductHoldStatus.RESERVED,
             appointmentId: null,
+            workflowBlockCode: status === AppointmentStatus.NO_SHOW ? 'appointment_no_show' : 'appointment_cancelled',
+            workflowBlockMessage:
+              status === AppointmentStatus.NO_SHOW
+                ? 'Appointment marked no-show. Reservation still requires manager follow-up.'
+                : 'Appointment was cancelled before booking conversion.',
           },
         });
 
@@ -1244,4 +1476,91 @@ export class LeadWorkflowService {
       return updated;
     });
   }
+
+  async retryCreateBooking(leadId: string, actorId?: string) {
+    return this.createBookingFromLead(leadId, actorId);
+  }
+
+  async refundDeposit(leadId: string, actorId?: string) {
+    return this.prisma.$transaction(async (tx) => {
+      const lead = await this.getLeadOrThrow(leadId, tx);
+      if (lead.bookingId || lead.status === LeadStatus.BOOKING_CREATED) {
+        throw new BadRequestException('Cannot refund lead deposit after booking has been created');
+      }
+
+      const depositPayment = await this.latestCompletedLeadDepositPayment(lead.id, tx);
+      if (!depositPayment) {
+        throw new BadRequestException('No completed security deposit exists for this lead');
+      }
+
+      const refundableAmount = Math.max(
+        Number(depositPayment.amount || 0) - Number(depositPayment.amountRefunded || 0),
+        0,
+      );
+      if (refundableAmount <= 0) {
+        throw new BadRequestException('Lead deposit has already been fully refunded');
+      }
+
+      const refund = await this.paymentsService.createRefund({
+        amount: refundableAmount,
+        sourcePaymentId: depositPayment.id,
+        leadId: lead.id,
+        description: `Refunded lead security deposit for lead ${lead.id}`,
+        processedById: actorId,
+      }, tx);
+
+      if (lead.appointmentId) {
+        await tx.appointment.updateMany({
+          where: {
+            id: lead.appointmentId,
+            archivedAt: null,
+            status: { notIn: [AppointmentStatus.CANCELLED, AppointmentStatus.NO_SHOW] },
+          },
+          data: {
+            status: AppointmentStatus.CANCELLED,
+            lifecycleStatus: 'cancelled',
+          },
+        });
+      }
+
+      await this.releaseReservedProductIfNeeded(lead, tx);
+
+      const after = await tx.lead.update({
+        where: { id: lead.id },
+        data: {
+          status: this.statusAfterDepositReversal(lead),
+          depositStatus: LeadDepositStatus.NONE,
+          productHoldStatus: ProductHoldStatus.RELEASED,
+          depositAmountPaid: 0,
+          depositReceivedAt: null,
+          appointmentId: null,
+          ...this.clearWorkflowBlock(),
+        },
+        include: this.leadInclude(),
+      });
+
+      await this.auditDisputesService.log({
+        action: AuditAction.REFUND_PROCESSED,
+        entity: 'LeadWorkflow',
+        entityId: lead.id,
+        actorId,
+        paymentId: refund.id,
+        summary: `Refunded security deposit for lead ${lead.id}`,
+        before: lead,
+        after,
+        metadata: {
+          step: 'refund_deposit',
+          sourcePaymentId: depositPayment.id,
+          refundPaymentId: refund.id,
+          amount: refundableAmount,
+        },
+      }, tx);
+
+      return {
+        ...after,
+        refund,
+      };
+    });
+  }
 }
+

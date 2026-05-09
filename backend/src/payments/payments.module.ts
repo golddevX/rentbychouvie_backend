@@ -7,9 +7,10 @@ import { PaymentsWebhookController } from './payments-webhook.controller';
 import { PayOSProvider } from './providers/payos.provider';
 import { PaymentGatewayService } from './providers/payment-gateway.service';
 import { AuditDisputesModule } from '../audit-disputes/audit-disputes.module';
+import { PricingModule } from '../pricing/pricing.module';
 
 @Module({
-  imports: [PrismaModule, ConfigModule, AuditDisputesModule],
+  imports: [PrismaModule, ConfigModule, AuditDisputesModule, PricingModule],
   controllers: [PaymentsController, PaymentsWebhookController],
   providers: [PaymentsService, PayOSProvider, PaymentGatewayService],
   exports: [PaymentsService],

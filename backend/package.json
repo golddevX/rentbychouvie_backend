@@ -10,7 +10,7 @@
     "start:dev": "nest start --watch",
     "start:debug": "nest start --debug --watch",
     "start:prod": "node dist/main",
-    "build": "npm run prisma:generate && nest build",
+    "build": "nest build",
     "test": "jest",
     "test:watch": "jest --watch",
     "test:cov": "jest --coverage",
@@ -18,7 +18,9 @@
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate deploy",
     "prisma:studio": "prisma studio",
-    "prisma:seed": "ts-node prisma/seed.ts"
+    "prisma:seed": "ts-node prisma/seed.ts",
+    "db:clear-operational": "node scripts/clear-operational-data.js",
+    "db:clear-inventory": "node scripts/clear-inventory-data.js"
   },
   "dependencies": {
     "@nestjs/common": "^10.4.0",

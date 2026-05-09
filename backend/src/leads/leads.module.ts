@@ -5,9 +5,10 @@ import { PrismaModule } from '../prisma/prisma.module';
 import { PricingModule } from '../pricing/pricing.module';
 import { AuditDisputesModule } from '../audit-disputes/audit-disputes.module';
 import { LeadWorkflowService } from './lead-workflow.service';
+import { PaymentsModule } from '../payments/payments.module';
 
 @Module({
-  imports: [PrismaModule, PricingModule, AuditDisputesModule],
+  imports: [PrismaModule, PricingModule, AuditDisputesModule, PaymentsModule],
   controllers: [LeadsController],
   providers: [LeadsService, LeadWorkflowService],
   exports: [LeadsService, LeadWorkflowService],

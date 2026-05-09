@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Body, Param, Patch, Delete, UseGuards } from '@nestjs/common';
+import { Controller, Get, Post, Body, Param, Patch, Delete, Query, UseGuards } from '@nestjs/common';
 import { AuthGuard } from '@nestjs/passport';
 import { ApiBearerAuth, ApiBody, ApiOkResponse, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { UsersService } from './users.service';
@@ -6,6 +6,7 @@ import { Roles } from '../shared/decorators/roles.decorator';
 import { RolesGuard } from '../shared/guards/roles.guard';
 import { UserRole } from '@prisma/client';
 import { CreateUserDto, UpdateUserDto } from './dto/user.dto';
+import { PaginationQueryDto } from '../shared/dto/pagination-query.dto';
 
 @ApiTags('Users')
 @ApiBearerAuth()
@@ -20,8 +21,19 @@ export class UsersController {
     summary: 'List users',
     description: 'Admin view of users who can perform lead, booking, pickup, return, and cashier operations.',
   })
-  async findAll() {
-    return this.usersService.findAll();
+  async findAll(
+    @Query() query: PaginationQueryDto,
+    @Query('role') role?: string,
+  ) {
+    return this.usersService.findAll({
+      page: query.page,
+      limit: query.limit,
+      search: query.search,
+      sortBy: query.sortBy ?? 'createdAt',
+      sortOrder: query.sortOrder ?? 'desc',
+      status: query.status,
+      role,
+    });
   }
 
   @Get(':id')

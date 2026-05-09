@@ -32,6 +32,7 @@ import {
   RefundPaymentDto,
   UpdatePaymentStatusDto,
 } from './dto/payment.dto';
+import { PaginationQueryDto } from '../shared/dto/pagination-query.dto';
 
 @ApiTags('Payment')
 @ApiBearerAuth()
@@ -53,14 +54,52 @@ export class PaymentsController {
     description: 'Cashier/admin payment ledger for booking deposits, rental payments, fees, and refunds.',
   })
   @ApiQuery({ name: 'status', enum: PaymentStatus, required: false })
-  async findAll(@Query('status') status?: string) {
+  async findAll(
+    @Query() query: PaginationQueryDto,
+    @Query('status') status?: string,
+    @Query('bookingId') bookingId?: string,
+    @Query('leadId') leadId?: string,
+  ) {
     if (status && !Object.values(PaymentStatus).includes(status as PaymentStatus)) {
       throw new BadRequestException('Invalid payment status');
     }
 
     return this.paymentsService.findAll({
+      page: query.page,
+      limit: query.limit,
+      search: query.search,
+      dateFrom: query.dateFrom,
+      dateTo: query.dateTo,
+      sortBy: query.sortBy ?? 'createdAt',
+      sortOrder: query.sortOrder ?? 'desc',
       status: status as PaymentStatus | undefined,
+      bookingId,
+      leadId,
     });
+  }
+
+  @Get('by-lead/:leadId')
+  @UseGuards(RolesGuard)
+  @Roles(UserRole.CASHIER, UserRole.OPERATOR, UserRole.MANAGER, UserRole.SUPER_ADMIN)
+  @ApiOperation({ summary: 'Get lead deposit payments and summary' })
+  async byLead(@Param('leadId') leadId: string) {
+    const [payments, summary] = await Promise.all([
+      this.paymentsService.getPaymentsByLead(leadId),
+      this.paymentsService.getPaymentSummaryForLead(leadId),
+    ]);
+    return { payments, summary };
+  }
+
+  @Get('by-booking/:bookingId')
+  @UseGuards(RolesGuard)
+  @Roles(UserRole.CASHIER, UserRole.OPERATOR, UserRole.MANAGER, UserRole.SUPER_ADMIN)
+  @ApiOperation({ summary: 'Get booking payments and summary' })
+  async byBooking(@Param('bookingId') bookingId: string) {
+    const [payments, summary] = await Promise.all([
+      this.paymentsService.getPaymentsByBooking(bookingId),
+      this.paymentsService.getPaymentSummaryForBooking(bookingId),
+    ]);
+    return { payments, summary };
   }
 
   @Get(':id')
@@ -82,7 +121,7 @@ export class PaymentsController {
       example: {
         id: 'clu7pay0000008l4czd77h0f',
         bookingId: 'clu7book0000008l49ra8vg12',
-        type: 'BOOKING_DEPOSIT',
+        type: 'SECURITY_DEPOSIT',
         amount: 425000,
         status: 'PENDING',
       },

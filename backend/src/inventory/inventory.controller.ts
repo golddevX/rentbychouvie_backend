@@ -21,6 +21,7 @@ import {
   CreateInventoryItemDto,
   UpdateInventoryStatusDto,
 } from './dto/inventory.dto';
+import { PaginationQueryDto } from '../shared/dto/pagination-query.dto';
 
 @ApiTags('Inventory')
 @ApiBearerAuth()
@@ -37,6 +38,7 @@ export class InventoryController {
   @ApiQuery({ name: 'productId', required: false })
   @ApiQuery({ name: 'status', enum: InventoryItemStatus, required: false })
   async findAllItems(
+    @Query() query: PaginationQueryDto,
     @Query('productId') productId?: string,
     @Query('status') status?: string,
   ) {
@@ -48,6 +50,11 @@ export class InventoryController {
     }
 
     return this.inventoryService.findAllItems({
+      page: query.page,
+      limit: query.limit,
+      search: query.search,
+      sortBy: query.sortBy ?? 'createdAt',
+      sortOrder: query.sortOrder ?? 'desc',
       productId,
       status: status as InventoryItemStatus | undefined,
     });

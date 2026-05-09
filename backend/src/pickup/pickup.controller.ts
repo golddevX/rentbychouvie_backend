@@ -39,8 +39,8 @@ export class PickupController {
   @Post(':bookingId/confirm')
   @Roles(UserRole.OPERATOR, UserRole.MANAGER, UserRole.SUPER_ADMIN)
   @ApiOperation({
-    summary: 'Confirm customer pickup',
-    description: 'Requires all expected QR codes. Marks booking PICKED_UP, rental PICKED_UP, and inventory RENTED.',
+    summary: 'Confirm customer handover',
+    description: 'Requires four handover images. Marks booking PICKED_UP, rental PICKED_UP, and products RENTED.',
   })
   @ApiBody({ type: ConfirmPickupDto })
   async confirm(
@@ -50,7 +50,7 @@ export class PickupController {
   ) {
     return this.pickupService.confirm(
       bookingId,
-      body.qrCodes,
+      body.images,
       user?.id ?? user?.sub,
       body.conditionNotes,
     );

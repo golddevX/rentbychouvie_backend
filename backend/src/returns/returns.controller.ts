@@ -19,7 +19,7 @@ export class ReturnsController {
   @Roles(UserRole.OPERATOR, UserRole.MANAGER, UserRole.SUPER_ADMIN)
   @ApiOperation({
     summary: 'Inspect returned items',
-    description: 'Stores return condition/images and returns a suggested fee from RentalPricingService.',
+    description: 'Stores return condition/images and returns the manually entered damage fee summary without automatic condition-based pricing.',
   })
   @ApiBody({ type: InspectReturnDto })
   @ApiOkResponse({
@@ -28,7 +28,7 @@ export class ReturnsController {
         bookingId: 'clu7book0000008l49ra8vg12',
         condition: 'damaged',
         suggestedFee: 150000,
-        pricingRule: 'Suggested by RentalPricingService based on return condition and declared damage.',
+        pricingRule: 'Uses manually entered damage fees only. No automatic condition-based damage fee is applied.',
       },
     },
   })
@@ -48,7 +48,7 @@ export class ReturnsController {
   @ApiOperation({
     summary: 'Settle returned booking',
     description:
-      'Calculates late fee, damage fee, lost accessory fee, next-booking impact, total fees, and refundable deposit. Marks rental/booking completed.',
+      'Stores the return inspection result and manual fee breakdown, then pushes the booking into payment settlement without auto-posting money records.',
   })
   @ApiBody({ type: SettleReturnDto })
   @ApiOkResponse({

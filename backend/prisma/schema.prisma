@@ -48,6 +48,13 @@ enum ProductHoldStatus {
   CONVERTED_TO_BOOKING
 }
 
+enum LeadItemStatus {
+  REQUESTED
+  RESERVED
+  UNAVAILABLE
+  REMOVED
+}
+
 enum LeadAppointmentIntent {
   FITTING
   PICKUP
@@ -61,16 +68,25 @@ enum LeadDepositStatus {
   EXPIRED
 }
 
+enum LeadDepositType {
+  PERCENT
+  CUSTOM_AMOUNT
+}
+
 enum BookingStatus {
   PENDING
   DRAFT
   DEPOSIT_REQUESTED
   DEPOSIT_RECEIVED
   CONFIRMED
+  AWAITING_REMAINING_PAYMENT
+  AWAITING_SECURITY_DEPOSIT
+  READY_FOR_PICKUP
   SCHEDULED_PICKUP
   PICKED_UP
   RETURN_PENDING
   RETURNED
+  SETTLEMENT_PENDING
   COMPLETED
   CANCELLED
 }
@@ -82,6 +98,37 @@ enum InventoryItemStatus {
   DAMAGED
   RETIRED
   MAINTENANCE
+}
+
+enum BookingItemPickupStatus {
+  PENDING
+  PICKED_UP
+}
+
+enum BookingItemReturnStatus {
+  PENDING
+  RETURNED
+  DAMAGED
+  MAINTENANCE
+  MISSING
+  DISPUTE
+}
+
+enum ReturnItemCondition {
+  GOOD
+  DIRTY
+  DAMAGED
+  MISSING_ACCESSORY
+  MISSING_ITEM
+}
+
+enum ProductStatus {
+  AVAILABLE
+  RESERVED
+  RENTED
+  MAINTENANCE
+  DAMAGED
+  RETIRED
 }
 
 enum RentalStatus {
@@ -117,6 +164,10 @@ enum PaymentType {
   BOOKING_DEPOSIT
   RENTAL_PAYMENT
   SECURITY_DEPOSIT
+  LATE_FEE
+  DAMAGE_FEE
+  ACCESSORY_FEE
+  DIRTY_HOLD
   FEE
   REFUND
 }
@@ -318,6 +369,9 @@ model Lead {
   quotedPrice   Float?
   depositAmountRequired Float @default(0)
   depositAmountPaid Float @default(0)
+  selectedDepositType LeadDepositType @default(PERCENT)
+  selectedDepositRate Int @default(50)
+  customDepositAmount Float?
   requiredItems Int?
   rentalDates   String? // JSON: { startDate, endDate }
   productId     String?
@@ -337,6 +391,8 @@ model Lead {
   depositDeadlineAt  DateTime?
   depositReceivedAt  DateTime?
   lostReason         String?
+  workflowBlockCode String?
+  workflowBlockMessage String?
   appointmentId      String?
   bookingId          String?
 
@@ -344,6 +400,8 @@ model Lead {
   assignedTo   User?   @relation(fields: [assignedToId], references: [id])
 
   convertedToBookingId String?
+  bookings Booking[] @relation("BookingLead")
+  items LeadItem[]
   payments Payment[]
 
   createdAt  DateTime  @default(now())
@@ -365,11 +423,16 @@ model Lead {
 
 model Product {
   id          String    @id @default(cuid())
+  code        String?   @unique
   name        String
   description String?
   category    String
   price       Float // Base 3-day rental price
+  productValue Float   @default(0)
+  rentalPrice  Float   @default(0)
   image       String?
+  qrCode      String?   @unique
+  status      ProductStatus @default(AVAILABLE)
   isActive    Boolean   @default(true)
   archivedAt  DateTime?
 
@@ -382,6 +445,7 @@ model Product {
   variants       ProductVariant[]
   rentalOrderItems RentalOrderItem[]
   leads Lead[]
+  leadItems LeadItem[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -435,6 +499,7 @@ model InventoryItem {
 
   // Relations
   bookingItems BookingItem[]
+  leadItems    LeadItem[]
   rentals      Rental[]      @relation("inventoryItems")
   appointmentReservations Appointment[] @relation("appointmentResourceItem")
   rentalOrderItems RentalOrderItem[]
@@ -459,6 +524,7 @@ model Booking {
   customer   Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
 
   leadId     String?
+  lead       Lead? @relation("BookingLead", fields: [leadId], references: [id], onDelete: SetNull)
   status     BookingStatus @default(DRAFT)
   startDate  DateTime
   endDate    DateTime
@@ -469,14 +535,26 @@ model Booking {
   basePrice Float @default(0)
   priceAdjustment Float @default(0)
   totalPrice Float // operational rental price after duration adjustment
+  productValue Float @default(0)
+  productValueTotal Float @default(0)
+  selectedDepositRate Int @default(50)
+  selectedDepositType LeadDepositType @default(PERCENT)
+  customDepositAmount Float?
+  depositPolicySnapshot Json?
+  rentalPaymentPolicySnapshot Json?
   bookingDepositRequired Float @default(0)
   bookingDepositPaid Float @default(0)
+  depositRequired Float @default(0)
+  depositPaid Float @default(0)
+  rentalPaid Float @default(0)
   securityDepositRequired Float @default(0)
   securityDepositHeld Float @default(0)
   securityDepositOption String?
   accessories String?
   lockedAt DateTime?
   failureReason String?
+  appointmentId String?
+  bookingDepositPaymentId String?
   replacementDiscountPercent Float?
 
   notes       String?
@@ -488,6 +566,7 @@ model Booking {
   items  BookingItem[]
   rental Rental?
   payments Payment[]
+  handoverRecord HandoverRecord?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -505,20 +584,52 @@ model BookingItem {
 
   productId String
   product   Product @relation(fields: [productId], references: [id])
+  productNameAtTime String?
   variantId String?
   variant   ProductVariant? @relation(fields: [variantId], references: [id])
 
-  inventoryItemId String
-  inventoryItem   InventoryItem @relation(fields: [inventoryItemId], references: [id])
+  inventoryItemId String?
+  inventoryItem   InventoryItem? @relation(fields: [inventoryItemId], references: [id])
 
   quantity    Int   @default(1)
   pricePerDay Float
+  productValueAtTime Float @default(0)
+  rentalPriceAtTime Float @default(0)
+  handoverImages String?
+  returnImages String?
+  fees Json?
+  pickupStatus BookingItemPickupStatus @default(PENDING)
+  returnStatus BookingItemReturnStatus @default(PENDING)
+  condition ReturnItemCondition?
 
-  @@unique([bookingId, inventoryItemId])
   @@index([bookingId])
   @@index([inventoryItemId])
   @@index([variantId])
   @@map("booking_items")
+}
+
+model LeadItem {
+  id String @id @default(cuid())
+  leadId String
+  lead Lead @relation(fields: [leadId], references: [id], onDelete: Cascade)
+
+  productId String
+  product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+  inventoryItemId String?
+  inventoryItem InventoryItem? @relation(fields: [inventoryItemId], references: [id], onDelete: SetNull)
+
+  productNameAtTime String?
+  productValueAtTime Float @default(0)
+  rentalPriceAtTime Float @default(0)
+  status LeadItemStatus @default(REQUESTED)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([leadId])
+  @@index([productId])
+  @@index([inventoryItemId])
+  @@map("lead_items")
 }
 
 model CalendarBlock {
@@ -667,6 +778,21 @@ model Rental {
   @@map("rentals")
 }
 
+model HandoverRecord {
+  id        String  @id @default(cuid())
+  bookingId String  @unique
+  booking   Booking @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+
+  images    String
+  note      String?
+  createdById String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("handover_records")
+}
+
 // ============================================================================
 // PAYMENTS & RECEIPTS
 // ============================================================================
@@ -698,6 +824,7 @@ model Payment {
   refundAmount  Float @default(0)
 
   description String?
+  metadata Json?
 
   processedById String?
   processedBy   User?   @relation("processedBy", fields: [processedById], references: [id])

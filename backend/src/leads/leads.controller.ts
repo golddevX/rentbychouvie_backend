@@ -1,4 +1,4 @@
-import { BadRequestException, Controller, Get, Post, Body, Param, Patch, UseGuards } from '@nestjs/common';
+import { BadRequestException, Controller, Get, Post, Body, Param, Patch, Query, UseGuards } from '@nestjs/common';
 import { AuthGuard } from '@nestjs/passport';
 import { ApiBearerAuth, ApiBody, ApiOkResponse, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { LeadsService } from './leads.service';
@@ -18,6 +18,7 @@ import {
   UpdateLeadStatusDto,
 } from './dto/lead.dto';
 import { LeadWorkflowService } from './lead-workflow.service';
+import { PaginationQueryDto } from '../shared/dto/pagination-query.dto';
 
 @ApiTags('Lead')
 @Controller('leads')
@@ -34,9 +35,18 @@ export class LeadsController {
     summary: 'List leads',
     description: 'Sales/admin lead pipeline. Lead is the first step in Lead -> Booking -> Payment -> Pickup -> Return.',
   })
-  async findAll() {
+  async findAll(
+    @Query() query: PaginationQueryDto,
+    @Query('assignedToId') assignedToId?: string,
+    @Query('source') source?: string,
+  ) {
     await this.leadWorkflowService.expirePendingDeposits();
-    return this.leadsService.findAll();
+    return this.leadsService.findAll({
+      ...query,
+      status: query.status as LeadStatus | undefined,
+      assignedToId,
+      source,
+    });
   }
 
   @Get(':id')
@@ -51,7 +61,7 @@ export class LeadsController {
   @Post()
   @ApiOperation({
     summary: 'Create lead',
-    description: 'Public-friendly endpoint to capture a customer lead before a booking exists.',
+    description: 'Public-friendly endpoint to capture a customer lead before a booking exists. Product ids are the selection source for this workflow.',
   })
   @ApiBody({ type: CreateLeadDto })
   @ApiOkResponse({
@@ -141,7 +151,7 @@ export class LeadsController {
   @ApiBearerAuth()
   @ApiOperation({
     summary: 'Select a product for lead workflow',
-    description: 'Stores product, variant, optional inventory item, rental dates, and appointment intent on the lead.',
+    description: 'Stores selected products, rental dates, and appointment intent on the lead.',
   })
   @ApiBody({ type: SelectLeadProductDto })
   async selectProduct(
@@ -158,7 +168,7 @@ export class LeadsController {
   @ApiBearerAuth()
   @ApiOperation({
     summary: 'Receive lead deposit and auto-create appointment',
-    description: 'Creates a booking_deposit payment, reserves inventory, and creates the next appointment from lead intent.',
+    description: 'Creates a security_deposit payment, reserves inventory once the minimum policy threshold is met, and creates the next appointment from lead intent.',
   })
   @ApiBody({ type: ReceiveLeadDepositDto })
   async receiveDeposit(
@@ -167,6 +177,24 @@ export class LeadsController {
     @CurrentUser() user: any,
   ) {
     return this.leadWorkflowService.receiveDeposit(id, body, user?.id ?? user?.sub);
+  }
+
+  @Post(':id/expire-deposit')
+  @UseGuards(AuthGuard('jwt'), RolesGuard)
+  @Roles(UserRole.SALES, UserRole.MANAGER, UserRole.SUPER_ADMIN)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Expire pending lead deposit request' })
+  async expireDeposit(@Param('id') id: string, @CurrentUser() user: any) {
+    return this.leadWorkflowService.expireDeposit(id, user?.id ?? user?.sub);
+  }
+
+  @Post(':id/refund-deposit')
+  @UseGuards(AuthGuard('jwt'), RolesGuard)
+  @Roles(UserRole.CASHIER, UserRole.MANAGER, UserRole.SUPER_ADMIN)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Refund completed lead booking deposit before booking conversion' })
+  async refundDeposit(@Param('id') id: string, @CurrentUser() user: any) {
+    return this.leadWorkflowService.refundDeposit(id, user?.id ?? user?.sub);
   }
 
   @Post(':id/create-appointment')
@@ -179,6 +207,24 @@ export class LeadsController {
   })
   async createAppointmentFromLead(@Param('id') id: string, @CurrentUser() user: any) {
     return this.leadWorkflowService.createAppointmentFromLead(id, user?.id ?? user?.sub);
+  }
+
+  @Post(':id/retry-appointment')
+  @UseGuards(AuthGuard('jwt'), RolesGuard)
+  @Roles(UserRole.SALES, UserRole.MANAGER, UserRole.SUPER_ADMIN)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Retry appointment creation after a workflow block' })
+  async retryAppointment(@Param('id') id: string, @CurrentUser() user: any) {
+    return this.leadWorkflowService.retryCreateAppointment(id, user?.id ?? user?.sub);
+  }
+
+  @Post(':id/retry-booking')
+  @UseGuards(AuthGuard('jwt'), RolesGuard)
+  @Roles(UserRole.SALES, UserRole.MANAGER, UserRole.SUPER_ADMIN)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Retry booking creation after appointment completion' })
+  async retryBooking(@Param('id') id: string, @CurrentUser() user: any) {
+    return this.leadWorkflowService.retryCreateBooking(id, user?.id ?? user?.sub);
   }
 
   @Patch(':id/archive')
